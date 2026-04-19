@@ -22,7 +22,7 @@ __version__ = "1.0.0"
 
 
 class KodaGroup(TyperGroup):
-    """Map `koda <id>` to `koda raw <id>` when <id> is all digits."""
+    """Map `koda <id> [ids...] [opts]` to `koda raw <id> [ids...] [opts]` when first arg is all digits."""
 
     def resolve_command(self, ctx, args):
         if args:
@@ -30,7 +30,7 @@ class KodaGroup(TyperGroup):
             if self.get_command(ctx, cmd_name) is None and cmd_name.isdigit():
                 raw_cmd = self.get_command(ctx, "raw")
                 if raw_cmd is not None:
-                    return "raw", raw_cmd, [cmd_name]
+                    return "raw", raw_cmd, list(args)
         return super().resolve_command(ctx, args)
 
 
@@ -121,8 +121,20 @@ def resolve_memo_id(explicit: Optional[int]) -> int:
         raise typer.Exit(code=1)
     return latest
 
+def apply_vars(content: str, var: Optional[List[str]]) -> str:
+    """Replace {{KEY}} placeholders using KEY=VALUE pairs from --var options."""
+    if not var:
+        return content
+    mapping = {}
+    for v in var:
+        if "=" in v:
+            k, val = v.split("=", 1)
+            mapping[k.strip()] = val
+    return re.sub(r"\{\{(\w+)\}\}", lambda m: mapping.get(m.group(1), m.group(0)), content)
+
+
 def emit_raw(entry_id: Optional[int]) -> None:
-    """Print memo body to stdout only (shared by `raw` and bare `koda`)."""
+    """Print memo body to stdout only (shared by bare `koda`)."""
     init_db()
     memo_id = resolve_memo_id(entry_id)
     with sqlite3.connect(DB_PATH) as conn:
@@ -415,36 +427,55 @@ def list_memos(
 
 @app.command()
 def show(
-    entry_id: Optional[int] = typer.Argument(
-        None, help="Entry ID (default: latest)."
+    entry_ids: Optional[List[int]] = typer.Argument(
+        None, help="Entry ID(s) (default: latest). Multiple IDs print each entry in order."
+    ),
+    var: Optional[List[str]] = typer.Option(
+        None, "--var", "-v", help="Variable substitution KEY=VALUE. Replaces {{KEY}} in body."
     ),
 ):
-    """Print one entry with ID, tags, and timestamps (Rich formatted)."""
+    """Print one or more entries with ID, tags, and timestamps (Rich formatted)."""
     init_db()
-    memo_id = resolve_memo_id(entry_id)
-    with sqlite3.connect(DB_PATH) as conn:
-        row = conn.execute(
-            "SELECT content, tags, created_at FROM memos WHERE id = ?", (memo_id,)
-        ).fetchone()
-    if not row:
-        console.print(f"[red]Error: Entry {memo_id} not found.[/red]")
-        raise typer.Exit(code=1)
-    console.print(
-        f"\n[bold cyan]ID: {memo_id}[/bold cyan] | {row[2]}\n"
-        f"Tags: [magenta]{row[1]}[/magenta]\n"
-        + "-" * 20
-        + f"\n{row[0]}"
-    )
+    ids = entry_ids if entry_ids else [resolve_memo_id(None)]
+    for i, memo_id in enumerate(ids):
+        if i > 0:
+            console.print()
+        with sqlite3.connect(DB_PATH) as conn:
+            row = conn.execute(
+                "SELECT content, tags, created_at FROM memos WHERE id = ?", (memo_id,)
+            ).fetchone()
+        if not row:
+            console.print(f"[red]Error: Entry {memo_id} not found.[/red]")
+            raise typer.Exit(code=1)
+        content = apply_vars(row[0] or "", var)
+        console.print(
+            f"\n[bold cyan]ID: {memo_id}[/bold cyan] | {row[2]}\n"
+            f"Tags: [magenta]{row[1]}[/magenta]\n"
+            + "-" * 20
+            + f"\n{content}"
+        )
 
 @app.command()
 def raw(
-    entry_id: Optional[int] = typer.Argument(
-        None,
-        help="Entry ID (default: latest). Body only, for pipes and shell substitution.",
+    entry_ids: Optional[List[int]] = typer.Argument(
+        None, help="Entry ID(s) (default: latest). Multiple IDs concatenate bodies with a blank line."
+    ),
+    var: Optional[List[str]] = typer.Option(
+        None, "--var", "-v", help="Variable substitution KEY=VALUE. Replaces {{KEY}} in body."
     ),
 ):
-    """Print memo body to stdout only (plain text, no Rich). Same as bare `koda <id>` when <id> is numeric."""
-    emit_raw(entry_id)
+    """Print memo body to stdout only (plain text, no Rich). Supports multiple IDs and --var substitution."""
+    init_db()
+    ids = entry_ids if entry_ids else [resolve_memo_id(None)]
+    for i, eid in enumerate(ids):
+        with sqlite3.connect(DB_PATH) as conn:
+            row = conn.execute("SELECT content FROM memos WHERE id = ?", (eid,)).fetchone()
+        if not row:
+            print(f"Error: Entry {eid} not found.", file=sys.stderr)
+            raise typer.Exit(code=1)
+        if i > 0:
+            sys.stdout.write("\n\n")
+        sys.stdout.write(apply_vars(row[0] or "", var))
 
 if __name__ == "__main__":
     try:
