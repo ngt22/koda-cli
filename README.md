@@ -4,13 +4,13 @@ A **memo and snippet CLI** for the terminal. Store frequently used commands, con
 
 ## Features
 
-- **Fast save and recall**: Manage entries with `add`, `ls`, `show`, `edit`, and `rm`.
+- **Fast save and recall**: Manage entries with `add`, `list`, `show`, `edit`, `pick`, and `remove`.
 - **Flexible input**: Arguments, heredocs, pipes, or `$EDITOR`.
 - **Tags**: Classify, filter, and batch-edit with multiple tags.
 - **Shortcuts**: Assign a memorable string alias to any entry and use it in place of a numeric index.
 - **Shell-friendly**: `raw` prints body-only text for `eval`, aliases, and scripts.
 - **Variable substitution**: Expand `${KEY}` and `$1 $2 ...` placeholders at recall time with `--var` / `-V`.
-- **Display index**: Each entry has a stable `uid` (sha1 short hash) and a user-controlled `idx`. Reorder freely with `mv`/`sw`, and close gaps with `compact`.
+- **Display index**: Each entry has a stable `uid` (sha1 short hash) and a user-controlled `idx`. Reorder freely with `move`/`swap`, and close gaps with `compact`.
 - **XDG-friendly**: Default data under `~/.local/share/koda/`, config under `~/.config/koda/`.
 - **Configurable defaults**: Persist preferences like default command or list page size in `~/.config/koda/config.toml`.
 
@@ -48,12 +48,12 @@ Stop memorizing long `docker`, `kubectl`, or `ffmpeg` invocations.
 
 ```bash
 koda add "docker compose -f docker-compose.dev.yml up --build" -t docker,dev
-koda ls
+koda list
 # Suppose the new entry is at display index 12 — execute directly:
-koda ex 12
+koda exec 12
 ```
 
-Put **only the command you intend to run** in the body. The editor template keeps metadata in a separate `---` block. Because `ex` runs shell code, **store only trusted text**.
+Put **only the command you intend to run** in the body. The editor template keeps metadata in a separate `---` block. Because `exec` runs shell code, **store only trusted text**.
 
 ### 2. Config templates and Dockerfile fragments
 
@@ -74,7 +74,7 @@ Save authenticated `curl` one-liners or common `SELECT` statements; search with 
 
 ```bash
 koda add -t api,curl 'curl -sS -H "Authorization: Bearer $TOKEN" https://api.example.com/v1/status'
-koda ls -q "curl"
+koda list -q "curl"
 ```
 
 ### 4. Cheat sheets and plain notes (not only commands)
@@ -83,12 +83,12 @@ Git recipes, install commands, meeting notes — anything that fits in plain tex
 
 ```bash
 koda add "git reset --soft HEAD~1   # undo last commit, keep changes" -t git
-koda ls -t git
+koda list -t git
 ```
 
 ### 5. Execute stored commands and pipe into scripts
 
-`raw` writes plain stdout (no Rich), so `$(koda raw <IDX>)` feeds the body directly into another command as an argument. Use `koda ex` to run the body as a shell command. **Keep the body simple** when you automate: extra newlines or prose can break word splitting.
+`raw` writes plain stdout (no Rich), so `$(koda raw <IDX>)` feeds the body directly into another command as an argument. Use `koda exec` to run the body as a shell command. **Keep the body simple** when you automate: extra newlines or prose can break word splitting.
 
 ```bash
 # Store a path
@@ -102,10 +102,10 @@ koda add "user@prod.example.com" -t ssh
 ssh $(koda raw)
 
 # Execute the latest entry as a shell command
-koda ex
+koda exec
 
 # Execute entry at index 5 (works for single-line and multi-line)
-koda ex 5
+koda exec 5
 
 # Capture body into a variable
 CONTENT=$(koda raw)
@@ -114,10 +114,24 @@ echo "$CONTENT"
 
 ## Command reference
 
+### One-letter subcommand aliases
+
+Each top-level subcommand has a single-letter alias:
+
+```bash
+a add      c copy     d remove   e edit
+g config   h shift    k compact  l list
+m move     p pick     r raw      s show
+t tag      w swap     x exec
+```
+
+Single-letter aliases are reserved and cannot be used as entry shortcuts.
+
 ### Add
 
 ```bash
 koda add "One-line memo" -t tag1,tag2
+koda a "Quick memo via alias" -t quick
 koda add -t snippet <<EOF
 multi-line
 snippet
@@ -150,25 +164,26 @@ cat ~/.ssh/config | koda add -t ssh
 ### List and search
 
 ```bash
-koda ls                        # entries ordered by display index (IDX)
-koda ls -n 50                  # 50 entries per page
-koda ls -p 2                   # show page 2
-koda ls -n 25 -p 3             # page 3 at 25 entries per page
-koda ls --rows 1               # 1-line content preview (default)
-koda ls --rows 10              # 10-line content preview
-koda ls --rows 0               # show all lines
-koda ls --truncate 80          # truncate lines at 80 characters
-koda ls --truncate 0           # disable line truncation
-koda ls -s created_at --desc   # sort by created_at descending
-koda ls -s shortcut --asc      # sort alphabetically by shortcut
-koda ls -q "docker"            # substring search on body
-koda ls -t "linux"             # filter by tag substring
-koda ls -T "archive"           # exclude entries tagged "archive"
-koda ls --shortcuts            # show only entries that have a shortcut (-S)
+koda list                        # entries ordered by display index (IDX)
+koda l -q "docker"              # same as `koda list -q "docker"`
+koda list -n 50                  # 50 entries per page
+koda list -p 2                   # show page 2
+koda list -n 25 -p 3             # page 3 at 25 entries per page
+koda list --rows 1               # 1-line content preview (default)
+koda list --rows 10              # 10-line content preview
+koda list --rows 0               # show all lines
+koda list --truncate 80          # truncate lines at 80 characters
+koda list --truncate 0           # disable line truncation
+koda list -s created_at --desc   # sort by created_at descending
+koda list -s shortcut --asc      # sort alphabetically by shortcut
+koda list -q "docker"            # substring search on body
+koda list -t "linux"             # filter by tag substring
+koda list -T "archive"           # exclude entries tagged "archive"
+koda list --shortcuts            # show only entries that have a shortcut (-S)
 ```
 
 Each row shows `IDX` (display index), `UID` (7-char sha1), `SC` (shortcut), tags, content preview, and creation time.
-`ls` always prints summary stats below the table: total entries, total pages, and max IDX.
+`list` always prints summary stats below the table: total entries, total pages, and max IDX.
 Sort columns are: `id`, `idx`, `uid`, `tags`, `content`, `created_at`, `modified_at`, `shortcut`. Use `--desc` / `--asc` to choose direction.
 Use `--rows 0` to display full content lines in the list.
 Use `--truncate` to control max characters per content line (`0` disables truncation).
@@ -178,17 +193,56 @@ Use `--exclude-tag` / `-T` to hide entries that match a tag substring.
 
 ```bash
 koda show 1
+koda s 1                   # same as `koda show 1`
 koda show deploy         # look up by shortcut
 koda edit 1
+koda e deploy            # same as `koda edit deploy`
 koda edit deploy         # edit entry by shortcut (shortcut editable in footer)
-koda cp 1                # duplicate to a new entry (shortcut is not copied)
-koda rm 1                # delete with confirmation
-koda rm deploy           # delete by shortcut
-koda rm 1 3 5-8          # delete multiple entries or ranges
-koda rm -t archive       # delete all entries tagged "archive"
-koda rm -q "tmp"         # delete entries matching body substring
-koda rm --all -f         # delete everything (--all always requires -f)
+koda copy 1                # duplicate to a new entry (shortcut is not copied)
+koda c 1                   # same as `koda copy 1`
+koda remove 1              # delete with confirmation
+koda d 1                   # same as `koda remove 1`
+koda remove deploy         # delete by shortcut
+koda remove 1 3 5-8        # delete multiple entries or ranges
+koda remove -t archive     # delete all entries tagged "archive"
+koda remove -q "tmp"       # delete entries matching body substring
+koda remove --all -f       # delete everything (--all always requires -f)
 ```
+
+### Pick with `fzf` (`pick`)
+
+Interactively select an entry, then run an action. By default, `pick` uses `defaults.cmd` (when it is `raw` or `show`).
+
+```bash
+# Pick and run default action (depends on defaults.cmd)
+koda pick
+koda p
+
+# Pick and execute immediately
+koda pick -x
+koda p -x
+koda pick --exec
+
+# Pick and edit immediately
+koda pick -e
+
+# Pick and only print IDX for command substitution / pipes
+koda pick -p
+koda show "$(koda pick -p)"
+koda s "$(koda p -p)"
+koda exec "$(koda pick -p)"
+koda x "$(koda p -p)"
+
+# Filter candidate list before selection
+koda pick -q "docker" -t dev
+koda p -q "docker" -t dev
+koda pick -T archive -S
+```
+
+Action flags are exclusive: choose one of `-e/--edit`, `-x/--exec`, `-r/--raw`, `-s/--show`.
+`-p/--print-id` cannot be combined with action flags.
+`pick` requires [`fzf`](https://github.com/junegunn/fzf) and an interactive TTY.
+`pick` uses an adaptive preview layout: wide terminals use a right-side preview, narrower terminals use a bottom preview (both wrapped) so the candidate list remains readable.
 
 ### Shortcuts
 
@@ -200,16 +254,20 @@ koda add "kubectl rollout restart deploy/api" -t k8s --shortcut restart
 
 # Use the shortcut anywhere an index is accepted:
 koda raw restart       # print body
-koda ex restart        # execute
+koda r restart         # same as `koda raw restart`
+koda exec restart      # execute
+koda x restart         # same as `koda exec restart`
 koda show restart      # show with metadata
-koda rm restart        # delete
+koda s restart         # same as `koda show restart`
+koda remove restart    # delete
+koda d restart         # same as `koda remove restart`
 
 # Or use the default command directly (no subcommand needed):
 koda restart           # same as `koda raw restart` when defaults.cmd = raw
 
 # List all entries that have shortcuts:
-koda ls --shortcuts
-koda ls -S --sort-by shortcut
+koda list --shortcuts
+koda list -S --sort-by shortcut
 ```
 
 To change or remove a shortcut, use `edit` — the `shortcut:` field appears in the metadata footer.
@@ -218,6 +276,7 @@ To change or remove a shortcut, use `edit` — the `shortcut:` field appears in 
 
 ```bash
 koda raw          # latest entry body only
+koda r            # same as `koda raw`
 koda raw 5        # entry at display index 5, body only
 koda raw deploy   # entry with shortcut "deploy", body only
 koda 5            # numeric args route to the default command
@@ -240,27 +299,30 @@ echo '#literal'
 echo "value#suffix"   # no whitespace before #
 ```
 
-### Reorder entries (`mv`, `sw`, `shift`, `compact`)
+### Reorder entries (`move`, `swap`, `shift`, `compact`)
 
 Each entry has a display index (`IDX`) you can freely rearrange — handy for keeping frequently used snippets at low numbers (0–9).
 
 ```bash
-koda sw 3 0        # swap display positions of entries 3 and 0
-koda mv 7 1        # move entry 7 to empty position 1 (position must be unoccupied)
+koda swap 3 0      # swap display positions of entries 3 and 0
+koda w 3 0         # same as `koda swap 3 0`
+koda move 7 1      # move entry 7 to empty position 1 (position must be unoccupied)
+koda m 7 1         # same as `koda move 7 1`
 koda shift 1       # shift all entries at index 1 and above up by 1 (makes room at 1)
+koda h 1           # same as `koda shift 1`
 koda shift 1 -n 3  # shift up by 3 positions
 koda shift 5 -n -1 # shift entries from index 5 downward by 1
 koda compact       # reassign indices to 0..n-1 and fill gaps
+koda k             # same as `koda compact`
 ```
 
-`mv` requires the destination index to be unoccupied. Use `shift` first to make room, or `sw` to exchange two occupied positions.
-
-Long-form aliases: `move` → `mv`, `swap` → `sw`.
+`move` requires the destination index to be unoccupied. Use `shift` first to make room, or `swap` to exchange two occupied positions.
 
 ### Batch tag (`tag`)
 
 ```bash
 koda tag 1 3 5 -t work          # add tag to individual entries
+koda t 1 3 5 -t work            # same as `koda tag ...`
 koda tag 2-6 -t archive         # add tag to a range
 koda tag 1 3-5 7 -T old         # remove tag from mixed selection
 koda tag 1 -t new -T old        # add one tag and remove another in one command
@@ -291,16 +353,16 @@ gcloud storage cp ./report.csv gs://my-company-analytics-prod-us-central1/upload
 koda add "gcloud storage cp \$1 gs://my-company-analytics-prod-us-central1/uploads/" -t gcloud,storage
 
 # From now on:
-koda ex -V ./report.csv
-koda ex -V ./summary.csv
+koda exec -V ./report.csv
+koda exec -V ./summary.csv
 ```
 
 Same pattern works for AWS S3:
 
 ```bash
 koda add "aws s3 sync \$1 s3://acme-frontend-assets-prod-us-east-1/app/" -t aws,s3
-koda ex -V ./dist
-koda ex -V ./build
+koda exec -V ./dist
+koda exec -V ./build
 ```
 
 Pass two positional values with repeated `-V` flags or space-separated in one:
@@ -317,8 +379,8 @@ koda raw 8 -V "/src/path /user@host:/dest"   # same result
 # Deploy to different environments by changing one variable:
 koda add "aws s3 sync ./dist s3://acme-frontend-\${env}-us-east-1/app/" -t aws,s3,deploy
 
-koda ex -V env=prod
-koda ex -V env=staging
+koda exec -V env=prod
+koda exec -V env=staging
 ```
 
 **Mix named and positional** — order of `-V` flags determines positional index:
@@ -336,11 +398,11 @@ Values containing spaces must be quoted so the shell passes them as one token:
 -V "admin 5432"         # two positional values: admin → $1, 5432 → $2
 ```
 
-**Execute with substitution** (`ex` command):
+**Execute with substitution** (`exec` command):
 
 ```bash
-koda ex 7 -V env=prod
-koda ex 7 -V ./report.csv
+koda exec 7 -V env=prod
+koda exec 7 -V ./report.csv
 ```
 
 ## Configuration
@@ -363,7 +425,7 @@ desc = false      # sort direction
 path = "~/.local/share/koda/koda.db"
 
 [exec]
-shell = "sh"      # shell used by `ex`
+shell = "sh"      # shell used by `exec`
 ```
 
 ### `config` subcommand

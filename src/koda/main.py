@@ -11,6 +11,7 @@ import subprocess
 import tempfile
 import re
 import signal
+import shutil
 from datetime import datetime
 from importlib.metadata import version
 from pathlib import Path
@@ -24,13 +25,23 @@ DATETIME_FMT = "%Y-%m-%d %H:%M:%S"
 
 
 ALIASES = {
-    "remove": "rm",
-    "list":   "ls",
-    "copy":   "cp",
-    "exec":   "ex",
-    "move":   "mv",
-    "swap":   "sw",
+    "a": "add",
+    "c": "copy",
+    "d": "remove",
+    "e": "edit",
+    "g": "config",
+    "h": "shift",
+    "k": "compact",
+    "l": "list",
+    "m": "move",
+    "p": "pick",
+    "r": "raw",
+    "s": "show",
+    "t": "tag",
+    "w": "swap",
+    "x": "exec",
 }
+RESERVED_SHORTCUTS = set(ALIASES.keys())
 
 
 class KodaGroup(TyperGroup):
@@ -53,7 +64,10 @@ class KodaGroup(TyperGroup):
 app = typer.Typer(
     help=(
         "Koda — memos and terminal snippets in SQLite. "
-        "Run with no subcommand to print the latest entry body (same as `koda raw`)."
+        "Run with no subcommand to print the latest entry body (same as `koda raw`).\n\n"
+        "One-letter aliases:\n"
+        "a=add c=copy d=remove e=edit g=config h=shift k=compact\n"
+        "l=list m=move p=pick r=raw s=show t=tag w=swap x=exec"
     ),
     context_settings={"help_option_names": ["-h", "--help"]},
     cls=KodaGroup,
@@ -291,6 +305,25 @@ def get_memo_stats(query=None, tag=None, exclude_tag=None, shortcuts_only=False)
     return total_count, max_idx
 
 
+def get_memos_all(
+    query=None,
+    tag=None,
+    exclude_tag=None,
+    shortcuts_only=False,
+    sort_by="idx",
+    desc=False,
+):
+    order_column = sort_by if sort_by in VALID_SORT_COLUMNS else "idx"
+    order_direction = "DESC" if desc else "ASC"
+    where_sql, params = _build_memo_filters(query, tag, exclude_tag, shortcuts_only)
+    sql = (
+        "SELECT id, uid, idx, content, tags, shortcut, created_at FROM memos"
+        f"{where_sql} ORDER BY {order_column} {order_direction}, id ASC"
+    )
+    with sqlite3.connect(DB_PATH) as conn:
+        return conn.execute(sql, params).fetchall()
+
+
 def delete_memo(memo_id: int) -> None:
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute("DELETE FROM memos WHERE id = ?", (memo_id,))
@@ -364,6 +397,15 @@ def _parse_tag_args(tag_args: Optional[List[str]]) -> List[str]:
     for t in (tag_args or []):
         result.extend(item.strip() for item in t.split(",") if item.strip())
     return result
+
+
+def _validate_shortcut(shortcut: Optional[str]) -> Optional[str]:
+    if shortcut and len(shortcut) == 1 and shortcut in RESERVED_SHORTCUTS:
+        console.print(
+            f"[red]Shortcut {shortcut!r} is reserved as a 1-letter subcommand alias.[/red]"
+        )
+        raise typer.Exit(code=1)
+    return shortcut
 
 
 def _apply_vars(content: str, vars: Optional[List[str]]) -> str:
@@ -442,6 +484,130 @@ def emit_raw(ref: Optional[str], vars: Optional[List[str]] = None) -> None:
     content = _apply_vars(row[3] if row[3] is not None else "", vars)
     content = _strip_raw_inline_comments(content)
     sys.stdout.write(content)
+
+
+def _pick_candidates(
+    query: Optional[str],
+    tag: Optional[str],
+    exclude_tag: Optional[str],
+    shortcuts_only: bool,
+    sort_by: Optional[str],
+    desc: Optional[bool],
+):
+    cfg = _config["list"]
+    effective_sort = (sort_by or cfg["sort_by"]).lower()
+    if effective_sort not in VALID_SORT_COLUMNS:
+        valid = ", ".join(sorted(VALID_SORT_COLUMNS))
+        console.print(f"[red]Invalid --sort-by '{sort_by}'. Use one of: {valid}.[/red]")
+        raise typer.Exit(code=1)
+    effective_desc = cfg["desc"] if desc is None else desc
+    return get_memos_all(
+        query=query,
+        tag=tag,
+        exclude_tag=exclude_tag,
+        shortcuts_only=shortcuts_only,
+        sort_by=effective_sort,
+        desc=effective_desc,
+    )
+
+
+def _pick_with_fzf(candidates) -> Optional[str]:
+    if shutil.which("fzf") is None:
+        console.print("[red]fzf is not installed. Install fzf to use `koda pick`.[/red]")
+        raise typer.Exit(code=1)
+
+    if not sys.stdin.isatty():
+        console.print("[red]`koda pick` requires an interactive TTY.[/red]")
+        raise typer.Exit(code=1)
+
+    lines = []
+    for _, uid, idx, content, tags, shortcut, created_at in candidates:
+        first_line = (content or "").splitlines()[0] if content else ""
+        display = (
+            f"{idx}\t{uid}\t{shortcut or '-'}\t{tags or '-'}\t{created_at}\t{first_line}"
+        )
+        lines.append(display)
+
+    term_cols = shutil.get_terminal_size(fallback=(120, 40)).columns
+    # Keep list area readable on narrower terminals by switching to bottom preview.
+    preview_window = "right:55%:wrap" if term_cols >= 170 else "down:55%:wrap"
+
+    proc = subprocess.run(
+        [
+            "fzf",
+            "--delimiter", "\t",
+            "--with-nth", "1,3,4,6",
+            "--prompt", "koda> ",
+            "--preview",
+            "printf 'IDX: %s\\nUID: %s\\nSC: %s\\nTags: %s\\nCreated: %s\\n\\n%s\\n' {1} {2} {3} {4} {5} {6}",
+            "--preview-window", preview_window,
+        ],
+        input="\n".join(lines),
+        text=True,
+        stdout=subprocess.PIPE,
+    )
+    if proc.returncode != 0:
+        return None
+
+    selected = proc.stdout.strip()
+    if not selected:
+        return None
+    return selected.split("\t", 1)[0].strip()
+
+
+def _resolve_pick_action(
+    edit_mode: bool,
+    exec_mode: bool,
+    raw_mode: bool,
+    show_mode: bool,
+    print_id: bool,
+) -> str:
+    selected = [
+        name
+        for enabled, name in (
+            (edit_mode, "edit"),
+            (exec_mode, "exec"),
+            (raw_mode, "raw"),
+            (show_mode, "show"),
+        )
+        if enabled
+    ]
+    if len(selected) > 1:
+        console.print("[red]Use only one of --edit/-e, --exec/-x, --raw/-r, or --show/-s.[/red]")
+        raise typer.Exit(code=1)
+    if print_id and selected:
+        console.print("[red]--print-id/-p cannot be combined with action flags.[/red]")
+        raise typer.Exit(code=1)
+    if selected:
+        return selected[0]
+    default_cmd = _config["defaults"]["cmd"]
+    if default_cmd in ("raw", "show"):
+        return default_cmd
+    console.print(
+        "[red]defaults.cmd must be 'raw' or 'show' for `koda pick` without action flags.[/red]"
+    )
+    console.print("[dim]Hint: use --exec/-x, --edit/-e, --raw/-r, or --show/-s.[/dim]")
+    raise typer.Exit(code=1)
+
+
+def _run_pick_action(action: str, ref: str) -> None:
+    if action == "raw":
+        emit_raw(ref)
+        return
+    if action == "show":
+        init_db()
+        row = resolve_ref(ref)
+        _, uid, idx, content, tags, shortcut, created_at = row
+        _print_memo(uid, idx, shortcut, content, tags, created_at)
+        return
+    if action == "edit":
+        edit(ref)
+        return
+    if action == "exec":
+        exec_memo(ref, None)
+        return
+    console.print(f"[red]Unsupported pick action: {action}[/red]")
+    raise typer.Exit(code=1)
 
 
 @app.callback(invoke_without_command=True)
@@ -525,6 +691,7 @@ def _add_impl(
     tag: Optional[List[str]] = None,
     shortcut: Optional[str] = None,
 ) -> None:
+    shortcut = _validate_shortcut(shortcut)
     init_db()
     content = ""
 
@@ -580,11 +747,11 @@ def add(
         None, "--shortcut", "-s", help="Short alias for this entry (e.g. 'deploy')."
     ),
 ):
-    """Create an entry from arguments, stdin, or your editor."""
+    """Create an entry from arguments, stdin, or your editor. Alias: `koda a`."""
     _add_impl(text, tag, shortcut)
 
 
-@app.command(name="rm")
+@app.command(name="remove")
 def rm(
     indices: Optional[List[str]] = typer.Argument(
         None, help="Entry indices, ranges (e.g. 1 3 5-8), or a single shortcut. Default: latest."
@@ -602,7 +769,7 @@ def rm(
         False, "--force", "-f", help="Delete without prompting."
     ),
 ):
-    """Delete entries. Defaults to latest; supports ranges, -t, -q, and --all for batch."""
+    """Delete entries. Defaults to latest; supports ranges, -t, -q, and --all for batch. Alias: `koda d`."""
     if all_entries and not force:
         console.print("[red]--all requires -f/--force.[/red]")
         raise typer.Exit(code=1)
@@ -689,13 +856,13 @@ def rm(
         console.print(f"[red]Deleted [{idx}]: {preview}...[/red]")
 
 
-@app.command(name="cp")
+@app.command(name="copy")
 def copy(
     ref: Optional[str] = typer.Argument(
         None, help="Source entry index or shortcut (default: latest)."
     ),
 ):
-    """Duplicate an entry to a new row (same body and tags, no shortcut)."""
+    """Duplicate an entry to a new row (same body and tags, no shortcut). Alias: `koda c`."""
     init_db()
     row = resolve_ref(ref)
     memo_id, uid, idx, content, tags, shortcut, created_at = row
@@ -716,7 +883,7 @@ def edit(
         None, help="Entry index or shortcut to edit (default: latest)."
     ),
 ):
-    """Open an entry in $EDITOR (body plus tags/shortcut/metadata footer)."""
+    """Open an entry in $EDITOR (body plus tags/shortcut/metadata footer). Alias: `koda e`."""
     init_db()
     row = resolve_ref(ref)
     memo_id, uid, idx, content, tags, shortcut, created_at = row
@@ -753,6 +920,7 @@ def edit(
                     new_shortcut = val if val else None
                 elif line.startswith("created_at:"):
                     new_created_at = line.removeprefix("created_at:").strip()
+            new_shortcut = _validate_shortcut(new_shortcut)
 
             try:
                 update_memo_full(memo_id, new_content, new_tags, new_shortcut, new_created_at)
@@ -890,7 +1058,7 @@ def _list_memos_impl(
     )
 
 
-@app.command(name="ls")
+@app.command(name="list")
 def list_memos(
     query: Optional[str] = typer.Option(
         None, "--query", "-q", help="Substring match on memo body."
@@ -927,8 +1095,71 @@ def list_memos(
         help="Max characters per content line (0 = no truncation). [config: list.truncate]",
     ),
 ):
-    """Show entries as a table with paging and sortable columns."""
+    """Show entries as a table with paging and sortable columns. Alias: `koda l`."""
     _list_memos_impl(query, tag, exclude_tag, shortcuts_only, per_page, page, sort_by, desc, rows, truncate)
+
+
+@app.command()
+def pick(
+    query: Optional[str] = typer.Option(
+        None, "--query", "-q", help="Substring match on memo body."
+    ),
+    tag: Optional[str] = typer.Option(
+        None, "--tag", "-t", help="Substring match on tags."
+    ),
+    exclude_tag: Optional[str] = typer.Option(
+        None, "--exclude-tag", "-T", help="Exclude entries whose tags include this substring."
+    ),
+    shortcuts_only: bool = typer.Option(
+        False, "--shortcuts", "-S", help="Show only entries that have a shortcut."
+    ),
+    sort_by: Optional[str] = typer.Option(
+        None, "--sort-by", case_sensitive=False,
+        help="Sort column: id, idx, uid, tags, content, created_at, modified_at, shortcut. [config: list.sort_by]",
+    ),
+    desc: Optional[bool] = typer.Option(
+        None, "--desc/--asc", help="Sort order. [config: list.desc]",
+    ),
+    print_id: bool = typer.Option(
+        False, "--print-id", "-p", help="Print selected IDX and exit without running a command."
+    ),
+    edit_mode: bool = typer.Option(
+        False, "--edit", "-e", help="Open selected entry in editor."
+    ),
+    exec_mode: bool = typer.Option(
+        False, "--exec", "-x", help="Execute selected entry."
+    ),
+    raw_mode: bool = typer.Option(
+        False, "--raw", "-r", help="Print selected entry body."
+    ),
+    show_mode: bool = typer.Option(
+        False, "--show", "-s", help="Show selected entry with metadata."
+    ),
+):
+    """Pick an entry with fzf, then run an action (or print IDX). Alias: `koda p`."""
+    if print_id and (edit_mode or exec_mode or raw_mode or show_mode):
+        console.print("[red]--print-id/-p cannot be combined with action flags.[/red]")
+        raise typer.Exit(code=1)
+
+    action: Optional[str] = None if print_id else _resolve_pick_action(
+        edit_mode, exec_mode, raw_mode, show_mode, print_id
+    )
+
+    init_db()
+    candidates = _pick_candidates(query, tag, exclude_tag, shortcuts_only, sort_by, desc)
+    if not candidates:
+        console.print("[yellow]No entries found.[/yellow]")
+        raise typer.Exit(code=1)
+
+    selected_ref = _pick_with_fzf(candidates)
+    if selected_ref is None:
+        raise typer.Exit(code=0)
+
+    if print_id:
+        sys.stdout.write(selected_ref + "\n")
+        return
+
+    _run_pick_action(action, selected_ref)
 
 
 @app.command()
@@ -937,7 +1168,7 @@ def show(
         None, help="Entry index or shortcut (default: latest)."
     ),
 ):
-    """Print one entry with index, uid, tags, and timestamps (Rich formatted)."""
+    """Print one entry with index, uid, tags, and timestamps (Rich formatted). Alias: `koda s`."""
     init_db()
     row = resolve_ref(ref)
     memo_id, uid, idx, content, tags, shortcut, created_at = row
@@ -960,7 +1191,7 @@ def raw(
         ),
     ),
 ):
-    """Print memo body to stdout only (plain text, no Rich). Same as bare `koda <idx>`."""
+    """Print memo body to stdout only (plain text, no Rich). Same as bare `koda <idx>`. Alias: `koda r`."""
     if not entry_refs:
         emit_raw(None, vars)
     else:
@@ -968,7 +1199,7 @@ def raw(
             emit_raw(ref, vars)
 
 
-@app.command(name="ex")
+@app.command(name="exec")
 def exec_memo(
     ref: Optional[str] = typer.Argument(
         None, help="Entry index or shortcut to execute (default: latest)."
@@ -983,7 +1214,7 @@ def exec_memo(
         ),
     ),
 ):
-    """Execute the memo body as a shell command."""
+    """Execute the memo body as a shell command. Alias: `koda x`."""
     init_db()
     row = resolve_ref(ref)
     memo_id, uid, idx, content, tags, shortcut, created_at = row
@@ -998,7 +1229,7 @@ def tag(
     tags: Optional[List[str]] = typer.Option(None, "--tag", "-t", help="Tag(s) to add."),
     untag: Optional[List[str]] = typer.Option(None, "--untag", "-T", help="Tag(s) to remove."),
 ):
-    """Add or remove tags on one or more entries. Supports ranges (e.g. 2-5)."""
+    """Add or remove tags on one or more entries. Supports ranges (e.g. 2-5). Alias: `koda t`."""
     if not tags and not untag:
         console.print("[red]Specify at least one of -t/--tag (add) or -T/--untag (remove).[/red]")
         raise typer.Exit(code=1)
@@ -1031,12 +1262,12 @@ def tag(
     console.print(f"[green]{'; '.join(parts)}.[/green]")
 
 
-@app.command(name="mv")
+@app.command(name="move")
 def move(
     from_idx: int = typer.Argument(..., help="Source display index."),
     to_idx: int = typer.Argument(..., help="Destination display index (must be empty)."),
 ):
-    """Move entry at FROM to an unoccupied display position TO."""
+    """Move entry at FROM to an unoccupied display position TO. Alias: `koda m`."""
     init_db()
     if from_idx == to_idx:
         return
@@ -1047,7 +1278,7 @@ def move(
         if conn.execute("SELECT 1 FROM memos WHERE idx = ?", (to_idx,)).fetchone() is not None:
             console.print(f"[red]Index {to_idx} is already occupied.[/red]")
             console.print(
-                f"[dim]Hint: `koda sw {from_idx} {to_idx}` to swap, "
+                f"[dim]Hint: `koda swap {from_idx} {to_idx}` to swap, "
                 f"or `koda shift {to_idx}` to make room first.[/dim]"
             )
             raise typer.Exit(code=1)
@@ -1060,7 +1291,7 @@ def shift_cmd(
     start: int = typer.Argument(..., help="Shift entries at this index and above."),
     count: int = typer.Option(1, "--count", "-n", help="Positions to shift (negative = shift down)."),
 ):
-    """Shift all entries at START and above by COUNT positions."""
+    """Shift all entries at START and above by COUNT positions. Alias: `koda h`."""
     init_db()
     if count == 0:
         return
@@ -1092,12 +1323,12 @@ def shift_cmd(
     console.print(f"[green]Shifted entries from index {start} by {count:+d}.[/green]")
 
 
-@app.command(name="sw")
+@app.command(name="swap")
 def swap(
     idx1: int = typer.Argument(..., help="First display index."),
     idx2: int = typer.Argument(..., help="Second display index."),
 ):
-    """Swap the display positions of two entries."""
+    """Swap the display positions of two entries. Alias: `koda w`."""
     init_db()
     if idx1 == idx2:
         return
@@ -1119,7 +1350,7 @@ def swap(
 
 @app.command(name="compact")
 def compact_indices():
-    """Fill index gaps by reassigning idx to contiguous values from 0."""
+    """Fill index gaps by reassigning idx to contiguous values from 0. Alias: `koda k`."""
     init_db()
     with sqlite3.connect(DB_PATH) as conn:
         rows = conn.execute("SELECT id, idx FROM memos ORDER BY idx ASC, id ASC").fetchall()
@@ -1151,7 +1382,7 @@ def compact_indices():
 
 config_app = typer.Typer(
     name="config",
-    help="View and modify Koda configuration.",
+    help="View and modify Koda configuration. Alias: `koda g`.",
     invoke_without_command=True,
     no_args_is_help=False,
     context_settings={"help_option_names": ["-h", "--help"]},
