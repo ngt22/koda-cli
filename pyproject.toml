@@ -1,0 +1,43 @@
+[project]
+name = "koda"
+version = "0.1.0"
+description = "Koda: A fast CLI for memos and terminal snippets."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "ngt22" }
+]
+keywords = ["koda", "memo", "snippet", "cli", "productivity", "sqlite"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Environment :: Console",
+    "Topic :: Utilities",
+]
+dependencies = [
+    "typer>=0.12.3",
+    "rich>=13.7.1",
+]
+
+[project.urls]
+Homepage = "https://github.com/ngt22/koda"
+Repository = "https://github.com/ngt22/koda.git"
+Issues = "https://github.com/ngt22/koda/issues"
+
+[project.scripts]
+koda = "koda.main:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/koda"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/koda"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
