@@ -486,6 +486,15 @@ def emit_raw(ref: Optional[str], vars: Optional[List[str]] = None) -> None:
     sys.stdout.write(content)
 
 
+def _read_stdin_refs() -> List[str]:
+    """Read whitespace-separated entry refs from stdin (non-interactive only)."""
+    if sys.stdin.isatty():
+        return []
+    data = sys.stdin.read().strip()
+    if not data:
+        return []
+    return [part for part in data.split() if part]
+  
 def _pick_candidates(
     query: Optional[str],
     tag: Optional[str],
@@ -509,7 +518,6 @@ def _pick_candidates(
         sort_by=effective_sort,
         desc=effective_desc,
     )
-
 
 def _pick_with_fzf(candidates) -> Optional[str]:
     if shutil.which("fzf") is None:
@@ -1168,7 +1176,19 @@ def show(
         None, help="Entry index or shortcut (default: latest)."
     ),
 ):
-    """Print one entry with index, uid, tags, and timestamps (Rich formatted). Alias: `koda s`."""
+
+    """Print one entry with index, uid, tags, and timestamps (Rich formatted). Alias: `koda s`.
+    
+    When no argument is given, this command also accepts one ref from stdin.
+    """
+    if ref is None:
+        stdin_refs = _read_stdin_refs()
+        if len(stdin_refs) > 1:
+            console.print("[red]show accepts one ref from stdin. Got multiple values.[/red]")
+            raise typer.Exit(code=1)
+        if stdin_refs:
+            ref = stdin_refs[0]
+
     init_db()
     row = resolve_ref(ref)
     memo_id, uid, idx, content, tags, shortcut, created_at = row
@@ -1191,11 +1211,21 @@ def raw(
         ),
     ),
 ):
-    """Print memo body to stdout only (plain text, no Rich). Same as bare `koda <idx>`. Alias: `koda r`."""
-    if not entry_refs:
+
+    """Print memo body to stdout only (plain text, no Rich). Same as bare `koda <idx>`. Alias: `koda r`.
+
+    When no argument is given, refs can also be passed from stdin.
+    """
+    refs = entry_refs
+    if not refs:
+        stdin_refs = _read_stdin_refs()
+        refs = stdin_refs or None
+
+    if not refs:
+
         emit_raw(None, vars)
     else:
-        for ref in entry_refs:
+        for ref in refs:
             emit_raw(ref, vars)
 
 
@@ -1214,7 +1244,19 @@ def exec_memo(
         ),
     ),
 ):
-    """Execute the memo body as a shell command. Alias: `koda x`."""
+
+    """Execute the memo body as a shell command. Alias: `koda x`.
+
+    When no argument is given, this command also accepts one ref from stdin.
+    """
+    if ref is None:
+        stdin_refs = _read_stdin_refs()
+        if len(stdin_refs) > 1:
+            console.print("[red]ex accepts one ref from stdin. Got multiple values.[/red]")
+            raise typer.Exit(code=1)
+        if stdin_refs:
+            ref = stdin_refs[0]
+
     init_db()
     row = resolve_ref(ref)
     memo_id, uid, idx, content, tags, shortcut, created_at = row

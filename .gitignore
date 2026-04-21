@@ -27,3 +27,7 @@ CLAUDE.md
 *.log
 .fuse_hidden*
 Thumbs.db
+
+# Local worktrees
+.worktree/
+.worktrees/
