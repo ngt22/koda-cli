@@ -179,6 +179,7 @@ Use `--exclude-tag` / `-T` to hide entries that match a tag substring.
 ```bash
 koda show 1
 koda show deploy         # look up by shortcut
+echo 1 | koda show       # read one ref from stdin
 koda edit 1
 koda edit deploy         # edit entry by shortcut (shortcut editable in footer)
 koda cp 1                # duplicate to a new entry (shortcut is not copied)
@@ -220,9 +221,12 @@ To change or remove a shortcut, use `edit` — the `shortcut:` field appears in 
 koda raw          # latest entry body only
 koda raw 5        # entry at display index 5, body only
 koda raw deploy   # entry with shortcut "deploy", body only
+echo 5 | koda raw # read ref(s) from stdin
 koda 5            # numeric args route to the default command
 koda deploy       # shortcut args also route to the default command
 ```
+
+`show`/`ex` accept one stdin ref when no argument is given. `raw` accepts one or more whitespace-separated refs from stdin when no argument is given.
 
 `raw` treats inline comments like shell scripts: an unquoted `#` at the start of a line or after whitespace hides everything to the right on that line. `show` always displays the original stored text.
 
