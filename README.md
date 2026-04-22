@@ -53,8 +53,8 @@ Each section below shows four equivalent forms:
 |---|---|
 | long | `koda exec web-srv -V localhost` |
 | built-in alias | `koda x web-srv -V localhost` |
-| Pattern A (`alias kd='koda'`) | `kd x web-srv -V localhost` |
-| Pattern B (two-letter aliases) | `kx web-srv -V localhost` |
+| kd prefix (`alias kd='koda'`) | `kd x web-srv -V localhost` |
+| two-letter alias (e.g. `alias kx='koda exec'`) | `kx web-srv -V localhost` |
 
 See [Recommended aliases](#recommended-aliases) for setup instructions.
 
@@ -80,10 +80,10 @@ koda add           # opens $EDITOR
 # built-in alias
 koda a "Quick note" -t quick -s dc
 
-# Pattern A
+# kd prefix
 kd a "Quick note" -t quick -s dc
 
-# Pattern B
+# two-letter alias
 ka "Quick note" -t quick -s dc
 ```
 
@@ -112,10 +112,10 @@ koda list --shortcuts              # only entries that have a shortcut
 # built-in alias
 koda l -q docker -t dev
 
-# Pattern A
+# kd prefix
 kd l -q docker -t dev
 
-# Pattern B
+# two-letter alias
 kl -q docker -t dev
 ```
 
@@ -137,10 +137,10 @@ echo 5 | koda show     # ref from stdin
 # built-in alias
 koda s web-srv
 
-# Pattern A
+# kd prefix
 kd s web-srv
 
-# Pattern B
+# two-letter alias
 ks web-srv
 ```
 
@@ -158,10 +158,10 @@ koda edit web-srv      # by shortcut
 # built-in alias
 koda e web-srv
 
-# Pattern A
+# kd prefix
 kd e web-srv
 
-# Pattern B
+# two-letter alias
 ke web-srv
 ```
 
@@ -183,11 +183,11 @@ koda remove --all -f          # delete everything (--all always requires -f)
 # built-in alias
 koda d web-srv
 
-# Pattern A
+# kd prefix
 kd d web-srv
 
-# Pattern B
-kd web-srv                   # kd = koda remove in Pattern B
+# two-letter alias
+kd web-srv                   # kd = koda remove in two-letter alias
 ```
 
 ---
@@ -204,10 +204,10 @@ koda copy web-srv
 # built-in alias
 koda c web-srv
 
-# Pattern A
+# kd prefix
 kd c web-srv
 
-# Pattern B
+# two-letter alias
 kc web-srv
 ```
 
@@ -233,10 +233,10 @@ koda exec web-srv -V localhost    # positional substitution
 # built-in alias
 koda x web-srv -V localhost
 
-# Pattern A
+# kd prefix
 kd x web-srv -V localhost
 
-# Pattern B
+# two-letter alias
 kx web-srv -V localhost
 ```
 
@@ -258,10 +258,10 @@ echo 5 | koda raw       # ref from stdin
 # built-in alias
 koda r web-srv
 
-# Pattern A
+# kd prefix
 kd r web-srv
 
-# Pattern B
+# two-letter alias
 kr web-srv
 ```
 
@@ -283,11 +283,11 @@ ssh -i ~/.ssh/key.pem ec2-user@$(koda raw bastion)
 tail -f $(koda raw nginx-log)
 curl -H "Authorization: Bearer $(koda raw api-token)" https://api.example.com/v1/status
 
-# Pattern A
+# kd prefix
 ssh -i ~/.ssh/key.pem ec2-user@$(kd r bastion)
 tail -f $(kd r nginx-log)
 
-# Pattern B — shortest form
+# two-letter alias — shortest form
 ssh -i ~/.ssh/key.pem ec2-user@$(kr bastion)
 tail -f $(kr nginx-log)
 curl -H "Authorization: Bearer $(kr api-token)" https://api.example.com/v1/status
@@ -317,11 +317,11 @@ koda pick --exec -q docker -t dev    # pre-filter by query and tag, then pick
 # built-in alias
 koda p -x
 
-# Pattern A
+# kd prefix
 kd p -x
 kd p -x -q docker -t dev
 
-# Pattern B
+# two-letter alias
 kp -x
 kp -x -q docker -t dev
 ```
@@ -331,13 +331,13 @@ kp -x -q docker -t dev
 ```bash
 # Eval the body of the selected entry (requires defaults.cmd = raw)
 eval $(koda pick -p | xargs koda raw)
-eval $(kd p -p | xargs kd r)    # Pattern A
-eval $(kp -p | xargs kr)        # Pattern B
+eval $(kd p -p | xargs kd r)    # kd prefix
+eval $(kp -p | xargs kr)        # two-letter alias
 
 # Pass the selected IDX to exec
 koda exec "$(koda pick -p)"
-kd x "$(kd p -p)"               # Pattern A
-kx "$(kp -p)"                   # Pattern B
+kd x "$(kd p -p)"               # kd prefix
+kx "$(kp -p)"                   # two-letter alias
 ```
 
 Other action flags: `-e` edit, `-r` raw, `-s` show.
@@ -387,13 +387,13 @@ koda add "gcloud storage cp \$1 gs://my-company-analytics-prod/uploads/" -t gclo
 # Run it with different values — no need to retype the bucket path
 koda exec upload -V ./report.csv
 koda exec upload -V ./summary.csv
-kx upload -V ./report.csv          # Pattern B
+kx upload -V ./report.csv          # two-letter alias
 
 # Named substitution — swap one variable by name
 koda add "aws s3 sync ./dist s3://acme-frontend-\${env}-us-east-1/app/" -t aws -s deploy
 koda exec deploy -V env=prod
 koda exec deploy -V env=staging
-kx deploy -V env=prod              # Pattern B
+kx deploy -V env=prod              # two-letter alias
 
 # Positional with multiple values
 koda add "rsync -avz \$1 \$2" -t rsync
@@ -428,13 +428,13 @@ koda m 7 1
 koda h 1
 koda k
 
-# Pattern A
+# kd prefix
 kd w 3 0
 kd m 7 1
 kd h 1
 kd k
 
-# Pattern B
+# two-letter alias
 kw 3 0
 km 7 1
 kh 1
@@ -457,10 +457,10 @@ koda tag 1 -t new -T old        # add one tag and remove another in one command
 # built-in alias
 koda t 1 3-5 -t archive
 
-# Pattern A
+# kd prefix
 kd t 1 3-5 -t archive
 
-# Pattern B
+# two-letter alias
 kt 1 3-5 -t archive
 ```
 
@@ -484,10 +484,10 @@ koda config path                      # print config file path
 # built-in alias
 koda g set defaults.cmd list
 
-# Pattern A
+# kd prefix
 kd g set defaults.cmd list
 
-# Pattern B
+# two-letter alias
 kg set defaults.cmd list
 ```
 
@@ -499,7 +499,7 @@ Two patterns are available. Choose one based on how much you want to shorten you
 
 ---
 
-### Pattern A — minimal (`kd='koda'` only)
+### kd prefix — minimal (`kd='koda'` only)
 
 Register only `kd` as an alias for `koda`, then use koda's built-in single-letter aliases for subcommands. No risk of conflicting with other tools.
 
@@ -508,7 +508,7 @@ Register only `kd` as an alias for `koda`, then use koda's built-in single-lette
 alias kd='koda'
 ```
 
-Examples with Pattern A:
+Examples with kd prefix:
 
 ```bash
 kd a "memo" -t tag -s sc    # add
@@ -525,11 +525,11 @@ kd g set defaults.cmd list  # config set
 
 ---
 
-### Pattern B — full two-letter aliases
+### two-letter alias — full two-letter aliases
 
 Register a two-letter alias for every subcommand. Shorter to type, but check for conflicts before adding.
 
-> **Note**: Pattern B assigns `kd` to `koda remove`. If you previously used `alias kd='koda'` (Pattern A), remove that line first.
+> **Note**: two-letter alias assigns `kd` to `koda remove`. If you previously used `alias kd='koda'` (kd prefix), remove that line first.
 
 ```bash
 # Add to ~/.zshrc or ~/.bashrc
@@ -540,7 +540,7 @@ alias ke='koda edit'
 alias kr='koda raw'
 alias kx='koda exec'
 alias kp='koda pick'
-alias kd='koda remove'   # ← replaces kd='koda' if you had Pattern A
+alias kd='koda remove'   # ← replaces kd='koda' if you had kd prefix
 alias kc='koda copy'
 alias km='koda move'
 alias kw='koda swap'
