@@ -423,7 +423,7 @@ def _apply_vars(content: str, vars: Optional[List[str]]) -> str:
                     key, value = item.split("=", 1)
                     content = content.replace(f"${{{key}}}", value)
                 else:
-                    content = re.sub(rf'\${pos_index}(?!\d)', re.escape(item), content)
+                    content = re.sub(rf'\${pos_index}(?!\d)', item.replace('\\', '\\\\'), content)
                     pos_index += 1
     return content
 
