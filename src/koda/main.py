@@ -4,6 +4,7 @@ import sqlite3
 import sys
 import hashlib
 import copy
+import csv
 from click.utils import make_str
 from typer.core import TyperGroup
 import os
@@ -408,23 +409,26 @@ def _validate_shortcut(shortcut: Optional[str]) -> Optional[str]:
     return shortcut
 
 
+def _parse_var_items(var_spec: str) -> List[str]:
+    """Parse a var spec into items using CSV rules: comma-delimited, "..." for quoting."""
+    reader = csv.reader([var_spec], quotechar='"', delimiter=',', skipinitialspace=True)
+    return list(reader)[0]
+
+
 def _apply_vars(content: str, vars: Optional[List[str]]) -> str:
     if not vars:
         return content
     pos_index = 1
     for var_spec in vars:
-        m = re.match(r'^(\w+)=(.*)', var_spec.strip(), re.DOTALL)
+        stripped = var_spec.strip()
+        m = re.match(r'^(\w+)=(.*)', stripped, re.DOTALL)
         if m:
             key, value = m.group(1), m.group(2)
             content = content.replace(f"${{{key}}}", value)
         else:
-            for item in var_spec.split():
-                if "=" in item:
-                    key, value = item.split("=", 1)
-                    content = content.replace(f"${{{key}}}", value)
-                else:
-                    content = re.sub(rf'\${pos_index}(?!\d)', item.replace('\\', '\\\\'), content)
-                    pos_index += 1
+            for item in _parse_var_items(stripped):
+                content = re.sub(rf'\${pos_index}(?!\d)', item.replace('\\', '\\\\'), content)
+                pos_index += 1
     return content
 
 
@@ -1206,8 +1210,8 @@ def raw(
         help=(
             "Variable substitution. Named: KEY=VALUE → replaces ${KEY}. "
             "Positional: VALUE → replaces $1,$2,... in order. "
-            "Space-separate multiple values in one flag or repeat -V. "
-            'Examples: -V "localhost 5432" -V name="new york"'
+            'Comma-separate multiple values; use "..." to include spaces or commas. '
+            'Examples: -V \'localhost,5432\' -V \'name=prod\' -V \'"hello world","foo,bar"\''
         ),
     ),
 ):
@@ -1239,8 +1243,8 @@ def exec_memo(
         help=(
             "Variable substitution. Named: KEY=VALUE → replaces ${KEY}. "
             "Positional: VALUE → replaces $1,$2,... in order. "
-            "Space-separate multiple values in one flag or repeat -V. "
-            'Examples: -V "localhost 5432" -V name="new york"'
+            'Comma-separate multiple values; use "..." to include spaces or commas. '
+            'Examples: -V \'localhost,5432\' -V \'name=prod\' -V \'"hello world","foo,bar"\''
         ),
     ),
 ):
