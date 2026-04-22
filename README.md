@@ -55,6 +55,36 @@ docker inspect web \
 curl http://$(kd r):3000/healthz
 ```
 
+## Quick reference
+
+### Subcommands
+
+| Command | Alias | Description |
+|---|---|---|
+| `add` | `a` | Save a new entry |
+| `raw` | `r` | Print entry body to stdout |
+| `list` | `l` | List and filter entries |
+| `exec` | `x` | Run a saved entry as a shell command |
+| `edit` | `e` | Open entry in `$EDITOR` |
+| `pick` | `p` | Interactive selector (requires fzf) |
+| `show` | `s` | Display entry with full metadata |
+| `remove` | `d` | Delete entries |
+| `copy` | `c` | Duplicate an entry |
+| `tag` | `t` | Batch-add or remove tags |
+| `move` | `m` | Move entry to a display index |
+| `swap` | `w` | Swap display positions of two entries |
+| `shift` | `h` | Shift entries up or down by N |
+| `compact` | `k` | Reassign indices to 0..n-1 |
+| `config` | `g` | Read/write configuration |
+
+### Options
+
+| Option | Description |
+|---|---|
+| `-s` / `--shortcut` | Assign a memorable alias to an entry |
+| `-t` / `--tag` | Assign tags (on `add`) or filter by tag |
+| `-V` / `--var` | Variable substitution at recall time |
+
 ## Installation
 
 ```bash
@@ -229,72 +259,6 @@ kl -q docker -t dev          # two-letter alias
 
 Each row shows `IDX`, `UID`, `SC` (shortcut), tags, content preview, and creation time.
 Sort columns: `id`, `idx`, `uid`, `tags`, `content`, `created_at`, `modified_at`, `shortcut`.
-
----
-
-### Shortcuts
-
-Shortcuts and variable substitution are not subcommands — they are options (`-s`, `-V`) that work across multiple commands.
-
-Assign a memorable string alias to any entry and use it instead of a numeric index.
-
-```bash
-# Save with a shortcut (-s is short for --shortcut)
-koda a "kubectl rollout restart deploy/api" -t k8s -s restart
-
-# Use the shortcut anywhere an index is accepted
-koda r restart
-koda x restart
-koda s restart
-koda d restart
-
-# Default command — no subcommand needed (when defaults.cmd = raw)
-koda restart          # → koda raw restart
-
-# List all entries that have shortcuts
-koda l -S
-koda l -S --sort-by shortcut
-```
-
-To change or remove a shortcut, open the entry with `edit` — the `shortcut:` field appears in the metadata footer.
-
----
-
-### Variable substitution (`-V` / `--var`)
-
-Embed placeholders in a saved entry; fill them in at recall time with `-V`.
-
-| Style | Placeholder | How to pass |
-|---|---|---|
-| Named | `${host}` | `-V KEY=VALUE` |
-| Positional | `$1`, `$2`, ... | `-V value` or `-V val1,val2` (comma-separated, left-to-right) |
-
-```bash
-# Save a template with a positional placeholder
-koda a "gcloud storage cp \$1 gs://my-company-analytics-prod/uploads/" -t gcloud -s upload
-
-# Run with different values — no need to retype the bucket path
-koda x upload -V ./report.csv
-koda x upload -V ./summary.csv
-kx upload -V ./report.csv          # two-letter alias
-
-# Named substitution — swap one variable by name
-koda a "aws s3 sync ./dist s3://acme-frontend-\${env}-us-east-1/app/" -t aws -s deploy
-koda x deploy -V env=prod
-koda x deploy -V env=staging
-kx deploy -V env=prod              # two-letter alias
-
-# Multiple positional values
-koda a "rsync -avz \$1 \$2" -t rsync
-koda r 8 -V /src/path -V user@host:/dest
-koda r 8 -V '/src/path,user@host:/dest'    # same result, comma-separated
-
-# Mix named and positional
-koda r 9 -V 'admin,5432' -V host=db.example.com -V name="new york"
-# → connect admin@db.example.com:5432 as new york
-```
-
-Positional values are comma-separated within a single `-V` flag. Use `"..."` inside the flag to include spaces or commas in a value: `-V '"hello world","foo,bar"'`.
 
 ---
 
@@ -523,6 +487,92 @@ koda config set defaults.cmd list   # long form
 kd g set defaults.cmd list          # kd prefix
 kg set defaults.cmd list            # two-letter alias
 ```
+
+---
+
+## Options
+
+The following are flags that work across multiple commands, not standalone subcommands.
+
+---
+
+### Shortcuts (`-s` / `--shortcut`)
+
+Assign a memorable string alias to any entry and use it instead of a numeric index.
+
+```bash
+# Save with a shortcut (-s is short for --shortcut)
+koda a "kubectl rollout restart deploy/api" -t k8s -s restart
+
+# Use the shortcut anywhere an index is accepted
+koda r restart
+koda x restart
+koda s restart
+koda d restart
+
+# Default command — no subcommand needed (when defaults.cmd = raw)
+koda restart          # → koda raw restart
+
+# List all entries that have shortcuts
+koda l -S
+koda l -S --sort-by shortcut
+```
+
+To change or remove a shortcut, open the entry with `edit` — the `shortcut:` field appears in the metadata footer.
+
+---
+
+### Tags (`-t` / `--tag`)
+
+Assign one or more tags to an entry at save time; use them to filter across commands.
+
+```bash
+koda a "docker compose up" -t docker,dev     # assign multiple tags at add time
+koda l -t docker                             # filter list by tag substring
+koda l -T archive                            # exclude entries tagged "archive"
+koda d -t tmp                                # delete all entries tagged "tmp"
+koda p -x -t dev                             # pick + exec, pre-filtered by tag
+```
+
+Use `tag` (subcommand) to add or remove tags on existing entries in bulk — see [Tag](#tag).
+
+---
+
+### Variable substitution (`-V` / `--var`)
+
+Embed placeholders in a saved entry; fill them in at recall time with `-V`.
+
+| Style | Placeholder | How to pass |
+|---|---|---|
+| Named | `${host}` | `-V KEY=VALUE` |
+| Positional | `$1`, `$2`, ... | `-V value` or `-V val1,val2` (comma-separated, left-to-right) |
+
+```bash
+# Save a template with a positional placeholder
+koda a "gcloud storage cp \$1 gs://my-company-analytics-prod/uploads/" -t gcloud -s upload
+
+# Run with different values — no need to retype the bucket path
+koda x upload -V ./report.csv
+koda x upload -V ./summary.csv
+kx upload -V ./report.csv          # two-letter alias
+
+# Named substitution — swap one variable by name
+koda a "aws s3 sync ./dist s3://acme-frontend-\${env}-us-east-1/app/" -t aws -s deploy
+koda x deploy -V env=prod
+koda x deploy -V env=staging
+kx deploy -V env=prod              # two-letter alias
+
+# Multiple positional values
+koda a "rsync -avz \$1 \$2" -t rsync
+koda r 8 -V /src/path -V user@host:/dest
+koda r 8 -V '/src/path,user@host:/dest'    # same result, comma-separated
+
+# Mix named and positional
+koda r 9 -V 'admin,5432' -V host=db.example.com -V name="new york"
+# → connect admin@db.example.com:5432 as new york
+```
+
+Positional values are comma-separated within a single `-V` flag. Use `"..."` inside the flag to include spaces or commas in a value: `-V '"hello world","foo,bar"'`.
 
 ---
 
