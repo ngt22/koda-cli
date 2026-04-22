@@ -285,6 +285,22 @@ kd x web-srv -V localhost        # kd prefix
 kx web-srv -V localhost          # two-letter alias
 ```
 
+**Workflow example — query a local LLM with a one-liner:**
+
+```bash
+# Save once via heredoc
+koda a -t llm -s ask <<'EOF'
+curl -sS http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"messages": [{"role": "user", "content": "$1"}], "stream": false}' \
+  | jq -r '.choices[0].message.content'
+EOF
+
+# Ask anything — no copy-paste, no editing
+koda x ask -V "How high is Mt. Fuji?"
+kx ask -V "Summarize the last git commit"   # two-letter alias
+```
+
 > **Security**: only store trusted commands. `exec` runs the body through the configured shell (`sh` by default).
 
 ---
