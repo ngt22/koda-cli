@@ -228,7 +228,7 @@ Embed placeholders in a saved entry; fill them in at recall time with `-V`.
 | Style | Placeholder | How to pass |
 |---|---|---|
 | Named | `${host}` | `-V KEY=VALUE` |
-| Positional | `$1`, `$2`, ... | `-V value` (left-to-right) |
+| Positional | `$1`, `$2`, ... | `-V value` or `-V val1,val2` (comma-separated, left-to-right) |
 
 ```bash
 # Save a template with a positional placeholder
@@ -248,14 +248,14 @@ kx deploy -V env=prod              # two-letter alias
 # Multiple positional values
 koda a "rsync -avz \$1 \$2" -t rsync
 koda r 8 -V /src/path -V user@host:/dest
-koda r 8 -V "/src/path user@host:/dest"    # same result
+koda r 8 -V '/src/path,user@host:/dest'    # same result, comma-separated
 
 # Mix named and positional
-koda r 9 -V "admin 5432" -V host=db.example.com -V name="new york"
+koda r 9 -V 'admin,5432' -V host=db.example.com -V name="new york"
 # → connect admin@db.example.com:5432 as new york
 ```
 
-Values with spaces must be quoted so the shell passes them as a single token.
+Positional values are comma-separated within a single `-V` flag. Use `"..."` inside the flag to include spaces or commas in a value: `-V '"hello world","foo,bar"'`.
 
 ---
 
