@@ -9,6 +9,7 @@ A **terminal launcher and snippet store**. Save commands, config templates, and 
 - **Flexible input**: Arguments, heredocs, pipes, or `$EDITOR`.
 - **Shortcuts**: Assign a memorable string alias to any entry and use it in place of a numeric index.
 - **Variable substitution**: Expand `${KEY}` and `$1 $2 ...` placeholders at recall time with `-V`.
+- **Command substitution**: Embed stored values directly in any command — `ssh $(kr bastion)`, `tail -f $(kr log-path)`.
 - **Shell-friendly output**: `raw` prints body-only text for pipes, `eval`, and scripts.
 - **Tags**: Classify, filter, and batch-edit entries with multiple tags.
 - **Display index**: Stable `uid` (SHA1 short hash) plus user-controlled `idx`. Reorder with `move`/`swap`; close gaps with `compact`.
@@ -253,7 +254,6 @@ koda raw 5
 koda raw web-srv        # by shortcut
 koda raw                # latest entry
 echo 5 | koda raw       # ref from stdin
-$(koda raw 5)           # command substitution
 
 # built-in alias
 koda r web-srv
@@ -263,6 +263,34 @@ kd r web-srv
 
 # Pattern B
 kr web-srv
+```
+
+**Command substitution** — embed a stored value directly inside any command you type:
+
+```bash
+# Without koda — retype long strings inline every time
+ssh -i ~/.ssh/key.pem ec2-user@bastion.prod.example.com
+tail -f /var/log/nginx/access.log
+curl -H "Authorization: Bearer eyJhbGciOiJSUzI1Ni..." https://api.example.com/v1/status
+
+# Store once, reference by shortcut
+koda add "bastion.prod.example.com"       -t ssh    --shortcut bastion
+koda add "/var/log/nginx/access.log"      -t log    --shortcut nginx-log
+koda add "eyJhbGciOiJSUzI1Ni..."          -t secret --shortcut api-token
+
+# Embed in any command with $()
+ssh -i ~/.ssh/key.pem ec2-user@$(koda raw bastion)
+tail -f $(koda raw nginx-log)
+curl -H "Authorization: Bearer $(koda raw api-token)" https://api.example.com/v1/status
+
+# Pattern A
+ssh -i ~/.ssh/key.pem ec2-user@$(kd r bastion)
+tail -f $(kd r nginx-log)
+
+# Pattern B — shortest form
+ssh -i ~/.ssh/key.pem ec2-user@$(kr bastion)
+tail -f $(kr nginx-log)
+curl -H "Authorization: Bearer $(kr api-token)" https://api.example.com/v1/status
 ```
 
 `raw` strips shell-style inline comments (`#` at line start or after whitespace). Use `show` to see the original stored text.
