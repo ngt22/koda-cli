@@ -16,6 +16,45 @@ A **terminal launcher and snippet store**. Save commands, config templates, and 
 - **XDG-friendly**: Data under `~/.local/share/koda/`, config under `~/.config/koda/`.
 - **Configurable defaults**: Persist preferences in `~/.config/koda/config.toml`.
 
+## In action
+
+**① Save a command once, run it with different inputs:**
+
+```bash
+koda a "ssh -i ~/.ssh/key.pem ec2-user@$1" -t ssh -s web-srv
+
+koda x web-srv -V prod.example.com
+koda x web-srv -V staging.example.com
+```
+
+**② Query a local LLM with a one-liner:**
+
+```bash
+# ka = koda add, kx = koda exec  (two-letter aliases)
+ka -t llm -s ask <<'EOF'
+curl -sS http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"messages": [{"role": "user", "content": "$1"}], "stream": false}' \
+  | jq -r '.choices[0].message.content'
+EOF
+
+# kx = koda exec — fill in $1 at call time
+kx ask -V "How high is Mt. Fuji?"
+kx ask -V "Summarize the last git commit"
+```
+
+**③ Pipe docker output in, retrieve immediately:**
+
+```bash
+# kd a = koda add, kd r = koda raw  (kd prefix: alias kd='koda')
+docker inspect web \
+  | jq -r '.[0].NetworkSettings.IPAddress' \
+  | kd a -t docker
+
+# no ref needed — kd r retrieves the most recent entry
+curl http://$(kd r):3000/healthz
+```
+
 ## Installation
 
 ```bash
