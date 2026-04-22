@@ -1,6 +1,6 @@
 [project]
 name = "koda"
-version = "1.0.1"
+version = "1.0.2"
 description = "Koda: A fast CLI for memos and terminal snippets."
 readme = "README.md"
 requires-python = ">=3.10"
