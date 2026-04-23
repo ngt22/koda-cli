@@ -1,6 +1,6 @@
 [project]
 name = "koda"
-version = "1.1.0"
+version = "1.1.1"
 description = "A fast CLI memo store and command launcher backed by SQLite or Turso."
 readme = "README.md"
 requires-python = ">=3.10"

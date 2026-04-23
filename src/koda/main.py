@@ -347,7 +347,7 @@ def _build_memo_filters(query=None, tag=None, exclude_tag=None, shortcuts_only=F
         params.append(f"%{exclude_tag}%")
     if shortcuts_only:
         sql += " AND shortcut IS NOT NULL AND shortcut != ''"
-    return sql, params
+    return sql, tuple(params)
 
 
 def get_memos(
