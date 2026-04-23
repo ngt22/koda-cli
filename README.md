@@ -1,18 +1,91 @@
 # Koda
 
-A **memo and snippet CLI** for the terminal. Store frequently used commands, config fragments, and notes in SQLite, then pull them back instantly with `list`, `show`, and search. Built with Python, Typer, and Rich.
+A **terminal launcher and snippet store**. Save commands, config templates, and notes to SQLite; retrieve and execute them instantly — by index, shortcut, or fuzzy search. Built with Python, Typer, and Rich.
 
 ## Features
 
-- **Fast save and recall**: Manage entries with `add`, `list`, `show`, `edit`, `pick`, and `remove`.
+- **Launcher**: Run any saved command with `exec` or `pick`, with variable substitution at call time.
+- **Command substitution**: Embed stored values directly in any command — `ssh $(kr bastion)`, `tail -f $(kr log-path)`.
+- **Fast save and recall**: `add`, `list`, `show`, `edit`, `pick`, `remove` — all with one-letter aliases.
 - **Flexible input**: Arguments, heredocs, pipes, or `$EDITOR`.
-- **Tags**: Classify, filter, and batch-edit with multiple tags.
 - **Shortcuts**: Assign a memorable string alias to any entry and use it in place of a numeric index.
-- **Shell-friendly**: `raw` prints body-only text for `eval`, aliases, and scripts.
-- **Variable substitution**: Expand `${KEY}` and `$1 $2 ...` placeholders at recall time with `--var` / `-V`.
-- **Display index**: Each entry has a stable `uid` (sha1 short hash) and a user-controlled `idx`. Reorder freely with `move`/`swap`, and close gaps with `compact`.
-- **XDG-friendly**: Default data under `~/.local/share/koda/`, config under `~/.config/koda/`.
-- **Configurable defaults**: Persist preferences like default command or list page size in `~/.config/koda/config.toml`.
+- **Variable substitution**: Expand `${KEY}` and `$1 $2 ...` placeholders at recall time with `-V`.
+- **Shell-friendly output**: `raw` prints body-only text for pipes, `eval`, and scripts.
+- **Tags**: Classify, filter, and batch-edit entries with multiple tags.
+- **Display index**: Stable `uid` (SHA1 short hash) plus user-controlled `idx`. Reorder with `move`/`swap`; close gaps with `compact`.
+- **XDG-friendly**: Data under `~/.local/share/koda/`, config under `~/.config/koda/`.
+- **Configurable defaults**: Persist preferences in `~/.config/koda/config.toml`.
+
+## In action
+
+**① Save a command once, run it with different inputs:**
+
+```bash
+koda a "ssh -i ~/.ssh/key.pem ec2-user@$1" -t ssh -s web-srv
+
+koda x web-srv -V prod.example.com
+koda x web-srv -V staging.example.com
+```
+
+**② Query a local LLM with a one-liner:**
+
+```bash
+# ka = koda add, kx = koda exec  (two-letter aliases)
+ka -t llm -s ask <<'EOF'
+curl -sS http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"messages": [{"role": "user", "content": "$1"}], "stream": false}' \
+  | jq -r '.choices[0].message.content'
+EOF
+
+# kx = koda exec — fill in $1 at call time
+kx ask -V "How high is Mt. Fuji?"
+kx ask -V "Summarize the last git commit"
+```
+
+**③ Pipe docker output in, retrieve immediately:**
+
+```bash
+# kd a = koda add, kd r = koda raw  (kd prefix: alias kd='koda')
+docker inspect web \
+  | jq -r '.[0].NetworkSettings.IPAddress' \
+  | kd a -t docker
+
+# no ref needed — kd r retrieves the most recent entry
+curl http://$(kd r):3000/healthz
+```
+
+## Quick reference
+
+### Subcommands
+
+| Command | Alias | Description |
+|---|---|---|
+| `add` | `a` | Save a new entry |
+| `raw` | `r` | Print entry body to stdout |
+| `list` | `l` | List and filter entries |
+| `exec` | `x` | Run a saved entry as a shell command |
+| `edit` | `e` | Open entry in `$EDITOR` |
+| `pick` | `p` | Interactive selector (requires fzf) |
+| `show` | `s` | Display entry with full metadata |
+| `remove` | `d` | Delete entries |
+| `copy` | `c` | Duplicate an entry |
+| `tag` | `t` | Batch-add or remove tags |
+| `move` | `m` | Move entry to a display index |
+| `swap` | `w` | Swap display positions of two entries |
+| `shift` | `h` | Shift entries up or down by N |
+| `compact` | `k` | Reassign indices to 0..n-1 |
+| `config` | `g` | Read/write configuration |
+
+Single-letter aliases are reserved and cannot be used as entry shortcuts.
+
+### Options
+
+| Option | Description |
+|---|---|
+| `-s` / `--shortcut` | Assign a memorable alias to an entry |
+| `-t` / `--tag` | Assign tags (on `add`) or filter by tag |
+| `-V` / `--var` | Variable substitution at recall time |
 - **Turso support**: Switch from local SQLite to a [Turso](https://turso.tech) remote database to share entries across machines.
 
 ## Installation
@@ -25,399 +98,536 @@ uv tool install .
 
 ## Update
 
-To update to the latest version:
-
 ```bash
 cd koda
 git pull
 uv tool install . --force
 ```
 
-## Recommended alias
+## Command reference
 
-Add this to `.zshrc` or `.bashrc` to type less:
+### Add
+
+Save a new entry from arguments, heredoc, stdin, or `$EDITOR`.
 
 ```bash
-alias kd='koda'
+koda a "docker compose up --build" -t docker -s dc
+koda a "quick note" -t work
+koda a              # opens $EDITOR
 ```
 
-## Example use cases
-
-### 1. Save shell one-liners as runnable snippets
-
-Stop memorizing long `docker`, `kubectl`, or `ffmpeg` invocations.
+Heredoc for multi-line content:
 
 ```bash
-koda add "docker compose -f docker-compose.dev.yml up --build" -t docker,dev
-koda list
-# Suppose the new entry is at display index 12 — execute directly:
-koda exec 12
-```
-
-Put **only the command you intend to run** in the body. The editor template keeps metadata in a separate `---` block. Because `exec` runs shell code, **store only trusted text**.
-
-### 2. Config templates and Dockerfile fragments
-
-Tag infra snippets and paste the full body with `show` when needed.
-
-```bash
-koda add -t docker,template <<'EOF'
+koda a -t infra <<'EOF'
 FROM python:3.12-slim
 RUN pip install uv
 WORKDIR /app
 EOF
-koda show   # show the entry just added (latest)
 ```
 
-### 3. Reuse API `curl` commands or SQL
-
-Save authenticated `curl` one-liners or common `SELECT` statements; search with `ls -q`.
+Pipe any command output directly into `koda a`:
 
 ```bash
-koda add -t api,curl 'curl -sS -H "Authorization: Bearer $TOKEN" https://api.example.com/v1/status'
-koda list -q "curl"
+history | grep ffmpeg | tail -1 | koda a -t ffmpeg
+kubectl get pods -o wide    | koda a -t k8s
+openssl rand -hex 32        | koda a -t secret
 ```
 
-### 4. Cheat sheets and plain notes (not only commands)
-
-Git recipes, install commands, meeting notes — anything that fits in plain text.
+Full form and aliases:
 
 ```bash
-koda add "git reset --soft HEAD~1   # undo last commit, keep changes" -t git
-koda list -t git
+koda add "memo" -t tag --shortcut sc   # long form
+kd a "memo" -t tag -s sc              # kd prefix
+ka "memo" -t tag -s sc                # two-letter alias
 ```
 
-### 5. Execute stored commands and pipe into scripts
+---
 
-`raw` writes plain stdout (no Rich), so `$(koda raw <IDX>)` feeds the body directly into another command as an argument. Use `koda exec` to run the body as a shell command. **Keep the body simple** when you automate: extra newlines or prose can break word splitting.
+### Raw — body-only output
+
+Print the entry body to stdout (no Rich formatting). Use for pipes, `eval`, and command substitution.
 
 ```bash
-# Store a path
-koda add "/var/log/nginx/access.log" -t log
-
-# Use the stored path as a command argument
-tail -f $(koda raw)
-
-# Store and reuse a hostname
-koda add "user@prod.example.com" -t ssh
-ssh $(koda raw)
-
-# Execute the latest entry as a shell command
-koda exec
-
-# Execute entry at index 5 (works for single-line and multi-line)
-koda exec 5
-
-# Capture body into a variable
-CONTENT=$(koda raw)
-echo "$CONTENT"
+koda r web-srv        # by shortcut
+koda r 5              # by index
+koda r                # latest entry
+echo 5 | koda r       # ref from stdin
 ```
 
-## Command reference
-
-### One-letter subcommand aliases
-
-Each top-level subcommand has a single-letter alias:
+Full form and aliases:
 
 ```bash
-a add      c copy     d remove   e edit
-g config   h shift    k compact  l list
-m move     p pick     r raw      s show
-t tag      w swap     x exec
+koda raw web-srv   # long form
+kd r web-srv       # kd prefix
+kr web-srv         # two-letter alias
 ```
 
-Single-letter aliases are reserved and cannot be used as entry shortcuts.
-
-### Add
+**Command substitution — embed a stored value inside any command:**
 
 ```bash
-koda add "One-line memo" -t tag1,tag2
-koda a "Quick memo via alias" -t quick
-koda add -t snippet <<EOF
-multi-line
-snippet
+# Without koda — retype long strings inline every time
+ssh -i ~/.ssh/key.pem ec2-user@bastion.prod.example.com
+tail -f /var/log/nginx/access.log
+
+# Save once
+koda a "bastion.prod.example.com"  -t ssh -s bastion
+koda a "/var/log/nginx/access.log" -t log -s nginx-log
+
+# Embed with $() — using two-letter alias
+ssh -i ~/.ssh/key.pem ec2-user@$(kr bastion)
+tail -f $(kr nginx-log)
+
+# kd prefix
+ssh -i ~/.ssh/key.pem ec2-user@$(kd r bastion)
+tail -f $(kd r nginx-log)
+```
+
+**Workflow example — save a token via pipe, reuse in requests:**
+
+```bash
+# Step 1: obtain a token and save it
+curl -s -X POST https://auth.example.com/token \
+  -d '{"client_id":"myapp","client_secret":"s3cr3t"}' \
+  | jq -r '.access_token' \
+  | koda a -t api,token -s api-token
+
+# Step 2: embed in every subsequent request — no copy-paste
+curl -H "Authorization: Bearer $(kr api-token)" \
+  https://api.example.com/v1/users
+
+# kd prefix
+curl -H "Authorization: Bearer $(kd r api-token)" \
+  https://api.example.com/v1/users
+
+# Refresh when expired
+koda e api-token   # opens $EDITOR to paste the new value
+```
+
+`raw` strips shell-style inline comments (`#` at line start or after whitespace). Use `show` to see the original stored text.
+
+```bash
+koda a 'echo hello  # this is a comment'
+koda r 5    # → echo hello
+koda s 5    # → echo hello  # this is a comment
+```
+
+---
+
+### List
+
+```bash
+koda l                          # all entries ordered by display index
+koda l -q "docker"              # substring search on body
+koda l -t linux                 # filter by tag substring
+koda l -T archive               # exclude entries tagged "archive"
+koda l -S                       # only entries that have a shortcut
+koda l -n 50 -p 2              # 50 entries per page, page 2
+koda l -s created_at --desc     # sort by creation date descending
+```
+
+Full form and aliases:
+
+```bash
+koda list -q docker -t dev   # long form
+kd l -q docker -t dev        # kd prefix
+kl -q docker -t dev          # two-letter alias
+```
+
+Each row shows `IDX`, `UID`, `SC` (shortcut), tags, content preview, and creation time.
+Sort columns: `id`, `idx`, `uid`, `tags`, `content`, `created_at`, `modified_at`, `shortcut`.
+
+---
+
+### Execute (`exec`) — run a saved command
+
+Run a saved entry as a shell command, with optional variable substitution.
+
+```bash
+# Without koda — retype or search history every time
+ssh -i ~/.ssh/key.pem ec2-user@192.168.1.100
+
+# Save once
+koda a "ssh -i ~/.ssh/key.pem ec2-user@\$1" -t ssh -s web-srv
+```
+
+```bash
+koda x web-srv              # run by shortcut
+koda x web-srv -V prod      # with variable substitution
+koda x 12                   # run by index
+```
+
+Full form and aliases:
+
+```bash
+koda exec web-srv -V localhost   # long form
+kd x web-srv -V localhost        # kd prefix
+kx web-srv -V localhost          # two-letter alias
+```
+
+**Workflow example — query a local LLM with a one-liner:**
+
+```bash
+# Save once via heredoc
+koda a -t llm -s ask <<'EOF'
+curl -sS http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"messages": [{"role": "user", "content": "$1"}], "stream": false}' \
+  | jq -r '.choices[0].message.content'
 EOF
-koda add   # opens $EDITOR
 
-# Assign a shortcut alias at save time:
-koda add "docker compose up --build" -t docker --shortcut dc
+# Ask anything — no copy-paste, no editing
+koda x ask -V "How high is Mt. Fuji?"
+kx ask -V "Summarize the last git commit"   # two-letter alias
 ```
 
-Any command's output can be piped directly into `koda add`:
+> **Security**: only store trusted commands. `exec` runs the body through the configured shell (`sh` by default).
+
+---
+
+### Edit
+
+Open an entry in `$EDITOR`. The footer contains editable metadata (tags, shortcut).
 
 ```bash
-# Save a command you just ran from history
-history | grep "ffmpeg" | tail -1 | koda add -t ffmpeg
-
-# Save the output of a command as a note
-kubectl get pods -o wide | koda add -t k8s
-
-# Save a generated value (e.g. a token or key) for later use
-openssl rand -hex 32 | koda add -t secret
-
-# Save a file path found by a search
-find /etc -name "*.conf" | fzf | koda add -t path
-
-# Save multi-line output (e.g. a config snippet)
-cat ~/.ssh/config | koda add -t ssh
+koda e web-srv        # by shortcut
+koda e 5              # by index
 ```
 
-### List and search
+Full form and aliases:
 
 ```bash
-koda list                        # entries ordered by display index (IDX)
-koda l -q "docker"              # same as `koda list -q "docker"`
-koda list -n 50                  # 50 entries per page
-koda list -p 2                   # show page 2
-koda list -n 25 -p 3             # page 3 at 25 entries per page
-koda list --rows 1               # 1-line content preview (default)
-koda list --rows 10              # 10-line content preview
-koda list --rows 0               # show all lines
-koda list --truncate 80          # truncate lines at 80 characters
-koda list --truncate 0           # disable line truncation
-koda list -s created_at --desc   # sort by created_at descending
-koda list -s shortcut --asc      # sort alphabetically by shortcut
-koda list -q "docker"            # substring search on body
-koda list -t "linux"             # filter by tag substring
-koda list -T "archive"           # exclude entries tagged "archive"
-koda list --shortcuts            # show only entries that have a shortcut (-S)
+koda edit web-srv   # long form
+kd e web-srv        # kd prefix
+ke web-srv          # two-letter alias
 ```
 
-Each row shows `IDX` (display index), `UID` (7-char sha1), `SC` (shortcut), tags, content preview, and creation time.
-`list` always prints summary stats below the table: total entries, total pages, and max IDX.
-Sort columns are: `id`, `idx`, `uid`, `tags`, `content`, `created_at`, `modified_at`, `shortcut`. Use `--desc` / `--asc` to choose direction.
-Use `--rows 0` to display full content lines in the list.
-Use `--truncate` to control max characters per content line (`0` disables truncation).
-Use `--exclude-tag` / `-T` to hide entries that match a tag substring.
+---
 
-### Show, edit, remove
+### Pick — interactive launcher (fzf)
+
+Interactively select an entry with `fzf`, then run an action. Requires [`fzf`](https://github.com/junegunn/fzf) and an interactive TTY.
 
 ```bash
-koda show 1
-koda s 1                   # same as `koda show 1`
-koda show deploy         # look up by shortcut
-echo 1 | koda show       # read one ref from stdin
-koda edit 1
-koda e deploy            # same as `koda edit deploy`
-koda edit deploy         # edit entry by shortcut (shortcut editable in footer)
-koda copy 1                # duplicate to a new entry (shortcut is not copied)
-koda c 1                   # same as `koda copy 1`
-koda remove 1              # delete with confirmation
-koda d 1                   # same as `koda remove 1`
-koda remove deploy         # delete by shortcut
-koda remove 1 3 5-8        # delete multiple entries or ranges
-koda remove -t archive     # delete all entries tagged "archive"
-koda remove -q "tmp"       # delete entries matching body substring
-koda remove --all -f       # delete everything (--all always requires -f)
+koda p -x                      # pick from all entries, execute immediately
+koda p -x -q docker -t dev     # pre-filter by query and tag, then pick
 ```
 
-### Pick with `fzf` (`pick`)
-
-Interactively select an entry, then run an action. By default, `pick` uses `defaults.cmd` (when it is `raw` or `show`).
+Full form and aliases:
 
 ```bash
-# Pick and run default action (depends on defaults.cmd)
-koda pick
-koda p
-
-# Pick and execute immediately
-koda pick -x
-koda p -x
-koda pick --exec
-
-# Pick and edit immediately
-koda pick -e
-
-# Pick and only print IDX for command substitution / pipes
-koda pick -p
-koda show "$(koda pick -p)"
-koda s "$(koda p -p)"
-koda exec "$(koda pick -p)"
-koda x "$(koda p -p)"
-
-# Filter candidate list before selection
-koda pick -q "docker" -t dev
-koda p -q "docker" -t dev
-koda pick -T archive -S
+koda pick --exec -q docker -t dev   # long form
+kd p -x -q docker -t dev            # kd prefix
+kp -x -q docker -t dev              # two-letter alias
 ```
 
-Action flags are exclusive: choose one of `-e/--edit`, `-x/--exec`, `-r/--raw`, `-s/--show`.
-`-p/--print-id` cannot be combined with action flags.
-`pick` requires [`fzf`](https://github.com/junegunn/fzf) and an interactive TTY.
-`pick` uses an adaptive preview layout: wide terminals use a right-side preview, narrower terminals use a bottom preview (both wrapped) so the candidate list remains readable.
-
-### Shortcuts
-
-Assign a memorable alias to any entry and use it instead of a numeric index:
+**Compound patterns — use pick as a selector:**
 
 ```bash
-# Save with a shortcut:
-koda add "kubectl rollout restart deploy/api" -t k8s --shortcut restart
+koda x "$(koda p -p)"          # pick IDX, pass to exec
+kd x "$(kd p -p)"              # kd prefix
+kx "$(kp -p)"                  # two-letter alias
 
-# Use the shortcut anywhere an index is accepted:
-koda raw restart       # print body
-koda r restart         # same as `koda raw restart`
-koda exec restart      # execute
-koda x restart         # same as `koda exec restart`
-koda show restart      # show with metadata
-koda s restart         # same as `koda show restart`
-koda remove restart    # delete
-koda d restart         # same as `koda remove restart`
-
-# Or use the default command directly (no subcommand needed):
-koda restart           # same as `koda raw restart` when defaults.cmd = raw
-
-# List all entries that have shortcuts:
-koda list --shortcuts
-koda list -S --sort-by shortcut
+eval $(kp -p | xargs kr)       # pick IDX, eval the body
 ```
 
-To change or remove a shortcut, use `edit` — the `shortcut:` field appears in the metadata footer.
+Other action flags: `-e` edit, `-r` raw, `-s` show.
+`-p` (print IDX only) cannot be combined with action flags.
 
-### Body-only stdout (scripts and shells)
+---
+
+### Show
+
+Display a single entry with full metadata.
 
 ```bash
-koda raw          # latest entry body only
-koda r            # same as `koda raw`
-koda raw 5        # entry at display index 5, body only
-koda raw deploy   # entry with shortcut "deploy", body only
-echo 5 | koda raw # read ref(s) from stdin
-koda 5            # numeric args route to the default command
-koda deploy       # shortcut args also route to the default command
+koda s web-srv        # by shortcut
+koda s 5              # by index
+echo 5 | koda s       # ref from stdin
 ```
 
-`show`/`ex` accept one stdin ref when no argument is given. `raw` accepts one or more whitespace-separated refs from stdin when no argument is given.
-
-`raw` treats inline comments like shell scripts: an unquoted `#` at the start of a line or after whitespace hides everything to the right on that line. `show` always displays the original stored text.
+Full form and aliases:
 
 ```bash
-koda add 'echo hello # comment'
-koda raw 10      # -> echo hello
-koda show 10     # -> echo hello # comment
+koda show web-srv   # long form
+kd s web-srv        # kd prefix
+ks web-srv          # two-letter alias
 ```
 
-To keep `#` as a literal character in `raw`, escape or quote it:
+---
+
+### Remove
+
+Delete one or more entries.
 
 ```bash
-echo \#literal
-echo '#literal'
-echo "value#suffix"   # no whitespace before #
+koda d web-srv              # by shortcut
+koda d 5                    # by index
+koda d 1 3 5-8              # multiple entries and ranges
+koda d -t archive           # delete all tagged "archive"
+koda d -q "tmp"             # delete entries matching body substring
+koda d --all -f             # delete everything (--all always requires -f)
 ```
+
+Full form and aliases:
+
+```bash
+koda remove web-srv   # long form
+kd d web-srv          # kd prefix
+kd web-srv            # two-letter alias (kd = koda remove)
+```
+
+---
+
+### Copy
+
+Duplicate an entry. The body and tags are copied; the shortcut is not.
+
+```bash
+koda c web-srv        # by shortcut
+koda c 5              # by index
+```
+
+Full form and aliases:
+
+```bash
+koda copy web-srv   # long form
+kd c web-srv        # kd prefix
+kc web-srv          # two-letter alias
+```
+
+---
+
+### Tag
+
+```bash
+koda t 1 3 5 -t work          # add tag to individual entries
+koda t 2-6 -t archive         # add tag to a range
+koda t 1 3-5 7 -T old         # remove tag from mixed selection
+koda t 1 -t new -T old        # add one tag and remove another in one command
+```
+
+Full form and aliases:
+
+```bash
+koda tag 1 3-5 -t archive   # long form
+kd t 1 3-5 -t archive       # kd prefix
+kt 1 3-5 -t archive         # two-letter alias
+```
+
+Re-tagging with an already-present tag is idempotent (no-op).
+
+---
 
 ### Reorder entries (`move`, `swap`, `shift`, `compact`)
 
-Each entry has a display index (`IDX`) you can freely rearrange — handy for keeping frequently used snippets at low numbers (0–9).
+Each entry has a display index (`IDX`) you can freely rearrange — useful for keeping frequently used snippets at low numbers.
 
 ```bash
-koda swap 3 0      # swap display positions of entries 3 and 0
-koda w 3 0         # same as `koda swap 3 0`
-koda move 7 1      # move entry 7 to empty position 1 (position must be unoccupied)
-koda m 7 1         # same as `koda move 7 1`
-koda shift 1       # shift all entries at index 1 and above up by 1 (makes room at 1)
-koda h 1           # same as `koda shift 1`
-koda shift 1 -n 3  # shift up by 3 positions
-koda shift 5 -n -1 # shift entries from index 5 downward by 1
-koda compact       # reassign indices to 0..n-1 and fill gaps
-koda k             # same as `koda compact`
+koda w 3 0        # swap display positions of entries 3 and 0
+koda m 7 1        # move entry 7 to empty position 1
+koda h 1          # shift entries at index 1+ up by 1 (makes room at 1)
+koda h 1 -n 3     # shift up by 3 positions
+koda h 5 -n -1    # shift entries from index 5 downward by 1
+koda k            # reassign all indices to 0..n-1, fill gaps
 ```
 
-`move` requires the destination index to be unoccupied. Use `shift` first to make room, or `swap` to exchange two occupied positions.
-
-### Batch tag (`tag`)
+Full form and aliases:
 
 ```bash
-koda tag 1 3 5 -t work          # add tag to individual entries
-koda t 1 3 5 -t work            # same as `koda tag ...`
-koda tag 2-6 -t archive         # add tag to a range
-koda tag 1 3-5 7 -T old         # remove tag from mixed selection
-koda tag 1 -t new -T old        # add one tag and remove another in one command
+koda swap 3 0    kd w 3 0    kw 3 0
+koda move 7 1    kd m 7 1    km 7 1
+koda shift 1     kd h 1      kh 1
+koda compact     kd k        kk
 ```
 
-Re-tagging with an already-present tag is a no-op (idempotent).
+`move` requires the destination index to be unoccupied. Use `shift` to make room first, or `swap` to exchange two occupied positions.
 
-### Variable substitution (`--var` / `-V`)
+---
 
-Embed placeholders in a memo at save time, then fill them in at recall time.
+### Configuration (`config`)
 
-Two placeholder styles:
+```bash
+koda g                           # show all settings with source
+koda g get defaults.cmd          # print a single value
+koda g set defaults.cmd list     # write to config file
+koda g unset list.per_page       # remove key (reverts to built-in default)
+koda g reset -f                  # delete config file without prompt
+koda g edit                      # open config in $EDITOR
+koda g path                      # print config file path
+```
+
+Full form and aliases:
+
+```bash
+koda config set defaults.cmd list   # long form
+kd g set defaults.cmd list          # kd prefix
+kg set defaults.cmd list            # two-letter alias
+```
+
+---
+
+## Options
+
+The following are flags that work across multiple commands, not standalone subcommands.
+
+---
+
+### Shortcuts (`-s` / `--shortcut`)
+
+Assign a memorable string alias to any entry and use it instead of a numeric index.
+
+```bash
+# Save with a shortcut (-s is short for --shortcut)
+koda a "kubectl rollout restart deploy/api" -t k8s -s restart
+
+# Use the shortcut anywhere an index is accepted
+koda r restart
+koda x restart
+koda s restart
+koda d restart
+
+# Default command — no subcommand needed (when defaults.cmd = raw)
+koda restart          # → koda raw restart
+
+# List all entries that have shortcuts
+koda l -S
+koda l -S --sort-by shortcut
+```
+
+To change or remove a shortcut, open the entry with `edit` — the `shortcut:` field appears in the metadata footer.
+
+---
+
+### Tags (`-t` / `--tag`)
+
+Assign one or more tags to an entry at save time; use them to filter across commands.
+
+```bash
+koda a "docker compose up" -t docker,dev     # assign multiple tags at add time
+koda l -t docker                             # filter list by tag substring
+koda l -T archive                            # exclude entries tagged "archive"
+koda d -t tmp                                # delete all entries tagged "tmp"
+koda p -x -t dev                             # pick + exec, pre-filtered by tag
+```
+
+Use `tag` (subcommand) to add or remove tags on existing entries in bulk — see [Tag](#tag).
+
+---
+
+### Variable substitution (`-V` / `--var`)
+
+Embed placeholders in a saved entry; fill them in at recall time with `-V`.
 
 | Style | Placeholder | How to pass |
 |---|---|---|
-| Named | `${host}` | `KEY=VALUE` |
-| Positional | `$1`, `$2`, ... | bare values, left-to-right |
-
-**Positional substitution** — use bare values; they map to `$1`, `$2`, ... in order:
-
-Cloud bucket names are long and hard to retype. Store the command once, pass only the part that changes:
+| Named | `${host}` | `-V KEY=VALUE` |
+| Positional | `$1`, `$2`, ... | `-V value` or `-V val1,val2` (comma-separated, left-to-right) |
 
 ```bash
-# Without Koda — retype the full bucket path every time:
-gcloud storage cp ./report.csv gs://my-company-analytics-prod-us-central1/uploads/
+# Save a template with a positional placeholder
+koda a "gcloud storage cp \$1 gs://my-company-analytics-prod/uploads/" -t gcloud -s upload
 
-# Store once with a positional placeholder for the local file:
-koda add "gcloud storage cp \$1 gs://my-company-analytics-prod-us-central1/uploads/" -t gcloud,storage
+# Run with different values — no need to retype the bucket path
+koda x upload -V ./report.csv
+koda x upload -V ./summary.csv
+kx upload -V ./report.csv          # two-letter alias
 
-# From now on:
-koda exec -V ./report.csv
-koda exec -V ./summary.csv
-```
+# Named substitution — swap one variable by name
+koda a "aws s3 sync ./dist s3://acme-frontend-\${env}-us-east-1/app/" -t aws -s deploy
+koda x deploy -V env=prod
+koda x deploy -V env=staging
+kx deploy -V env=prod              # two-letter alias
 
-Same pattern works for AWS S3:
+# Multiple positional values
+koda a "rsync -avz \$1 \$2" -t rsync
+koda r 8 -V /src/path -V user@host:/dest
+koda r 8 -V '/src/path,user@host:/dest'    # same result, comma-separated
 
-```bash
-koda add "aws s3 sync \$1 s3://acme-frontend-assets-prod-us-east-1/app/" -t aws,s3
-koda exec -V ./dist
-koda exec -V ./build
-```
-
-Pass two positional values with repeated `-V` flags or space-separated in one:
-
-```bash
-koda add "rsync -avz \$1 \$2" -t rsync
-koda raw 8 -V /src/path -V /user@host:/dest
-koda raw 8 -V "/src/path /user@host:/dest"   # same result
-```
-
-**Named substitution** — use `KEY=VALUE` when you want to swap a specific part by name:
-
-```bash
-# Deploy to different environments by changing one variable:
-koda add "aws s3 sync ./dist s3://acme-frontend-\${env}-us-east-1/app/" -t aws,s3,deploy
-
-koda exec -V env=prod
-koda exec -V env=staging
-```
-
-**Mix named and positional** — order of `-V` flags determines positional index:
-
-```bash
-# Template: connect $1@${host}:$2 as ${name}
-koda raw 9 -V "admin 5432" -V host=db.example.com -V name="new york"
+# Mix named and positional
+koda r 9 -V 'admin,5432' -V host=db.example.com -V name="new york"
 # → connect admin@db.example.com:5432 as new york
 ```
 
-Values containing spaces must be quoted so the shell passes them as one token:
+Positional values are comma-separated within a single `-V` flag. Use `"..."` inside the flag to include spaces or commas in a value: `-V '"hello world","foo,bar"'`.
+
+---
+
+## Recommended aliases
+
+Two patterns are available. Choose one based on how much you want to shorten your workflow.
+
+---
+
+### kd prefix — minimal (`alias kd='koda'` only)
+
+Register only `kd` as an alias for `koda`, then use koda's built-in single-letter aliases for subcommands (`kd a`, `kd x`, `kd p -x`, etc.). No risk of conflicting with other tools.
 
 ```bash
--V name="new york"      # value is: new york
--V "admin 5432"         # two positional values: admin → $1, 5432 → $2
+# Add to ~/.zshrc or ~/.bashrc
+alias kd='koda'
 ```
 
-**Execute with substitution** (`exec` command):
+Usage with kd prefix:
 
 ```bash
-koda exec 7 -V env=prod
-koda exec 7 -V ./report.csv
+kd a "memo" -t tag -s sc    # add
+kd l -q docker              # list
+kd s web-srv                # show
+kd e web-srv                # edit
+kd r web-srv                # raw
+kd x web-srv -V localhost   # exec
+kd p -x -q docker           # pick + exec
+kd d web-srv                # remove
+kd t 1 3-5 -t archive       # tag
+kd g set defaults.cmd list  # config set
 ```
+
+---
+
+### Two-letter alias — full set
+
+Register a two-letter alias for every subcommand. Shorter to type, but check for conflicts before adding.
+
+> **Note**: This pattern assigns `kd` to `koda remove`. If you already have `alias kd='koda'` (kd prefix), remove that line first.
+
+```bash
+# Add to ~/.zshrc or ~/.bashrc
+alias ka='koda add'
+alias kl='koda list'
+alias ks='koda show'
+alias ke='koda edit'
+alias kr='koda raw'
+alias kx='koda exec'
+alias kp='koda pick'
+alias kd='koda remove'   # ← replaces kd='koda' if you had kd prefix
+alias kc='koda copy'
+alias km='koda move'
+alias kw='koda swap'
+alias kh='koda shift'
+alias kk='koda compact'
+alias kt='koda tag'
+alias kg='koda config'
+```
+
+**Potential conflicts — check before adding:**
+
+| Alias | Possible conflict |
+|---|---|
+| `ks` | Kakoune session manager on some setups |
+| `kt` | Kotlin toolchain (`ktlint`, etc.) in some environments |
+
+Run `alias` in your shell to see what is already defined before adding these.
+
+---
 
 ## Configuration
 
-Koda reads `~/.config/koda/config.toml` (XDG: `$XDG_CONFIG_HOME/koda/config.toml`).
-All settings are optional — unset values fall back to the built-in defaults.
+Koda reads `~/.config/koda/config.toml` (XDG: `$XDG_CONFIG_HOME/koda/config.toml`). All settings are optional — unset values fall back to built-in defaults.
 
 ```toml
 [defaults]
-cmd = "raw"       # "raw", "list", "show", or "add" — what bare `kd` does
+cmd = "raw"       # "raw", "list", "show", or "add" — what bare `koda` does
 
 [list]
 per_page = 20     # entries per page
@@ -435,29 +645,16 @@ url = "libsql://your-db.turso.io"   # Turso database URL
 token = "your-auth-token"           # Auth token (prefer KODA_TURSO_TOKEN env var)
 
 [exec]
-shell = "sh"      # shell used by `exec`
-```
-
-### `config` subcommand
-
-```bash
-koda config                       # show all settings with source (default/file/env)
-koda config get defaults.cmd      # print a single value
-koda config set defaults.cmd list # write to config file
-koda config unset list.per_page   # remove key (reverts to default)
-koda config reset                 # delete config file (prompts for confirmation)
-koda config reset -f              # delete without prompt
-koda config edit                  # open config file in $EDITOR
-koda config path                  # print config file path
+shell = "sh"      # shell used by exec
 ```
 
 Priority order: **CLI flags > environment variables > config file > built-in defaults**
 
 ## Environment variables
 
-| Variable           | Purpose |
-|--------------------|---------|
-| `KODA_DB_PATH`     | Override database file path |
+| Variable | Purpose |
+|---|---|
+| `KODA_DB_PATH` | Override database file path |
 | `KODA_DEFAULT_CMD` | Override `defaults.cmd` for this session |
 | `KODA_CONFIG_PATH` | Override config file path |
 | `KODA_TURSO_URL`   | Turso database URL (overrides `turso.url` in config) |
