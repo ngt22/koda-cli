@@ -264,7 +264,7 @@ def _coerce_config_value(key: str, raw: str):
 
 
 _config, _config_sources = load_config()
-DB_PATH = Path(_config["db"]["path"])
+DB_PATH = Path(_config["db"]["path"]).expanduser()
 
 
 @contextmanager
