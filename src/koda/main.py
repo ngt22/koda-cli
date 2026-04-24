@@ -368,8 +368,7 @@ def get_memos(
         "SELECT id, uid, idx, content, tags, shortcut, created_at FROM memos"
         f"{where_sql} ORDER BY {order_column} {order_direction}, id ASC LIMIT ? OFFSET ?"
     )
-    params.append(limit)
-    params.append(offset)
+    params = params + (limit, offset)
     with _db_connection() as conn:
         return conn.execute(sql, params).fetchall()
 
