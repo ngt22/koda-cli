@@ -250,6 +250,8 @@ koda l -T archive               # exclude entries tagged "archive"
 koda l -S                       # only entries that have a shortcut
 koda l -n 50 -p 2              # 50 entries per page, page 2
 koda l -s created_at --desc     # sort by creation date descending
+koda l --columns idx,uid,sc,tags,content,created_at   # all columns
+koda l --columns idx,content    # minimal view
 ```
 
 Full form and aliases:
@@ -260,7 +262,7 @@ kd l -q docker -t dev        # kd prefix
 kl -q docker -t dev          # two-letter alias
 ```
 
-Each row shows `IDX`, `UID`, `SC` (shortcut), tags, content preview, and creation time.
+Default columns: `IDX`, `SC`, `Tags`, `Content`. Available columns: `idx`, `uid`, `sc`, `tags`, `content`, `created_at` (`idx` is required).
 Sort columns: `id`, `idx`, `uid`, `tags`, `content`, `created_at`, `modified_at`, `shortcut`.
 
 ---
@@ -661,6 +663,7 @@ rows = 1          # content preview lines (0 = all)
 truncate = 80     # max chars per line (0 = no truncation)
 sort_by = "idx"   # default sort column
 desc = false      # sort direction
+columns = ["idx", "sc", "tags", "content"]   # idx is required; available: idx, uid, sc, tags, content, created_at
 
 [db]
 path = "~/.local/share/koda/koda.db"

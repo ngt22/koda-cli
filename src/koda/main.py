@@ -5,6 +5,7 @@ import sys
 import hashlib
 import copy
 import csv
+import json
 from click.utils import make_str
 from typer.core import TyperGroup
 import os
@@ -101,9 +102,21 @@ CONFIG_PATH = Path(os.getenv("KODA_CONFIG_PATH", DEFAULT_CONFIG_PATH))
 
 VALID_SORT_COLUMNS = {"id", "idx", "uid", "tags", "content", "created_at", "modified_at", "shortcut"}
 
+VALID_LIST_COLUMNS = ["idx", "uid", "sc", "tags", "content", "created_at"]
+REQUIRED_LIST_COLUMNS = {"idx"}
+
+COLUMN_DEFS: dict = {
+    "idx":        ("IDX",        {"justify": "right", "width": 4}),
+    "uid":        ("UID",        {"width": 7, "style": "dim"}),
+    "sc":         ("SC",         {"width": 10, "style": "bold green"}),
+    "tags":       ("Tags",       {"style": "magenta", "width": 15}),
+    "content":    ("Content",    {"ratio": 1}),
+    "created_at": ("Created At", {"width": 19}),
+}
+
 CONFIG_DEFAULTS: dict = {
     "defaults": {"cmd": "raw"},
-    "list":     {"per_page": 20, "rows": 1, "truncate": 80, "sort_by": "idx", "desc": False},
+    "list":     {"per_page": 20, "rows": 1, "truncate": 80, "sort_by": "idx", "desc": False, "columns": ["idx", "sc", "tags", "content"]},
     "db":       {"path": str(DEFAULT_DB_PATH), "backend": "local"},
     "turso":    {"url": "", "token": ""},
     "exec":     {"shell": "sh"},
@@ -120,6 +133,7 @@ _CONFIG_TYPES: dict[str, type] = {
     "list.truncate": int,
     "list.sort_by":  str,
     "list.desc":     bool,
+    "list.columns":  list,
     "db.path":       str,
     "db.backend":    str,
     "turso.url":     str,
@@ -135,6 +149,15 @@ _CONFIG_VALIDATORS: dict[str, tuple[Callable, str]] = {
     "list.sort_by":  (
         lambda v: v in VALID_SORT_COLUMNS,
         f"must be one of: {', '.join(sorted(VALID_SORT_COLUMNS))}",
+    ),
+    "list.columns": (
+        lambda v: (
+            isinstance(v, list)
+            and len(v) > 0
+            and all(c in VALID_LIST_COLUMNS for c in v)
+            and REQUIRED_LIST_COLUMNS.issubset(v)
+        ),
+        f'must include "idx"; available: {", ".join(VALID_LIST_COLUMNS)}',
     ),
     "db.backend":    (lambda v: v in ("local", "turso"), "must be 'local' or 'turso'"),
 }
@@ -206,6 +229,9 @@ def _write_config_file(data: dict) -> None:
         for k, v in values.items():
             if isinstance(v, bool):
                 lines.append(f"{k} = {'true' if v else 'false'}")
+            elif isinstance(v, list):
+                items = ", ".join(f'"{c}"' for c in v)
+                lines.append(f"{k} = [{items}]")
             elif isinstance(v, str):
                 lines.append(f'{k} = "{v}"')
             else:
@@ -224,8 +250,13 @@ def _coerce_config_value(key: str, raw: str):
                 return False
             else:
                 raise ValueError(raw)
+        if typ is list:
+            parsed = json.loads(raw)
+            if not isinstance(parsed, list):
+                raise ValueError(raw)
+            return parsed
         return typ(raw)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, json.JSONDecodeError):
         console.print(
             f"[red]Invalid value for {key!r}: {raw!r} (expected {typ.__name__})[/red]"
         )
@@ -1036,10 +1067,13 @@ def _list_memos_impl(
     desc: Optional[bool] = None,
     rows: Optional[str] = None,
     truncate: Optional[int] = None,
+    columns: Optional[List[str]] = None,
 ) -> None:
     init_db()
 
     cfg = _config["list"]
+    if columns is None:
+        columns = cfg["columns"]
     if per_page is None:
         per_page = cfg["per_page"]
     elif per_page < 1:
@@ -1102,12 +1136,11 @@ def _list_memos_impl(
         return
 
     table = Table(box=None, header_style="bold magenta", expand=True)
-    table.add_column("IDX", justify="right", width=4)
-    table.add_column("UID", width=7, style="dim")
-    table.add_column("SC", width=10, style="bold green")
-    table.add_column("Tags", style="magenta", width=15)
-    table.add_column("Content", ratio=1)
-    table.add_column("Created At", width=19)
+    for col in columns:
+        label, kwargs = COLUMN_DEFS[col]
+        table.add_column(label, **kwargs)
+
+    row_values: dict = {}
     for _, uid, idx, content, tags, sc, dt in memos:
         content_lines = (content or "").splitlines()
         if rows_value is None:
@@ -1128,14 +1161,15 @@ def _list_memos_impl(
                 ]
 
         preview = "\n".join(preview_lines)
-        table.add_row(
-            str(idx),
-            uid or "",
-            sc or "",
-            tags or "",
-            preview,
-            dt,
-        )
+        row_values = {
+            "idx": str(idx),
+            "uid": uid or "",
+            "sc": sc or "",
+            "tags": tags or "",
+            "content": preview,
+            "created_at": dt,
+        }
+        table.add_row(*[row_values[col] for col in columns])
     console.print(table)
     rows_text = "0" if rows_value is None else str(rows_value)
     truncate_text = "off" if truncate == 0 else str(truncate)
@@ -1181,9 +1215,23 @@ def list_memos(
         None, "--truncate",
         help="Max characters per content line (0 = no truncation). [config: list.truncate]",
     ),
+    columns: Optional[str] = typer.Option(
+        None, "--columns",
+        help=(
+            "Comma-separated columns to display. idx is required. "
+            f"Available: {', '.join(VALID_LIST_COLUMNS)}. [config: list.columns]"
+        ),
+    ),
 ):
     """Show entries as a table with paging and sortable columns. Alias: `koda l`."""
-    _list_memos_impl(query, tag, exclude_tag, shortcuts_only, per_page, page, sort_by, desc, rows, truncate)
+    parsed_columns: Optional[List[str]] = None
+    if columns is not None:
+        parsed_columns = [c.strip() for c in columns.split(",") if c.strip()]
+        validator, msg = _CONFIG_VALIDATORS["list.columns"]
+        if not validator(parsed_columns):
+            console.print(f"[red]Invalid --columns: {msg}[/red]")
+            raise typer.Exit(code=1)
+    _list_memos_impl(query, tag, exclude_tag, shortcuts_only, per_page, page, sort_by, desc, rows, truncate, parsed_columns)
 
 
 @app.command()
