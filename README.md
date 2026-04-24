@@ -698,7 +698,7 @@ Koda supports [Turso](https://turso.tech) as a remote backend, letting you share
 ```bash
 pip install libsql-experimental
 # or with uv:
-uv tool install "koda[turso]"
+uv tool install ".[turso]"
 ```
 
 2. Create a Turso database and get your URL and token from the [Turso dashboard](https://app.turso.tech) or CLI:
