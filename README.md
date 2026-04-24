@@ -1,6 +1,6 @@
 # Koda
 
-A **terminal launcher and snippet store**. Save commands, config templates, and notes to SQLite; retrieve and execute them instantly — by index, shortcut, or fuzzy search. Built with Python, Typer, and Rich.
+A **terminal launcher, snippet store, and cross-machine clipboard**. Save commands, config templates, notes, and any text to SQLite; retrieve and execute them instantly — by index, shortcut, or fuzzy search. Sync to [Turso](https://turso.tech) to access the same store from any machine. Built with Python, Typer, and Rich.
 
 ## Features
 
@@ -13,6 +13,8 @@ A **terminal launcher and snippet store**. Save commands, config templates, and 
 - **Shell-friendly output**: `raw` prints body-only text for pipes, `eval`, and scripts.
 - **Tags**: Classify, filter, and batch-edit entries with multiple tags.
 - **Display index**: Stable `uid` (SHA1 short hash) plus user-controlled `idx`. Reorder with `move`/`swap`; close gaps with `compact`.
+- **Terminal clipboard**: Save any text with `ka`, recall it instantly with `kr` or `ks` — paste into prompts, commands, or scripts without retyping.
+- **Cross-machine sync**: Switch to a [Turso](https://turso.tech) remote backend and the same store is available from every terminal, on every machine.
 - **XDG-friendly**: Data under `~/.local/share/koda/`, config under `~/.config/koda/`.
 - **Configurable defaults**: Persist preferences in `~/.config/koda/config.toml`.
 
@@ -43,7 +45,32 @@ kx ask -V "How high is Mt. Fuji?"
 kx ask -V "Summarize the last git commit"
 ```
 
-**③ Pipe docker output in, retrieve immediately:**
+**③ Use as a terminal clipboard — paste anything, anywhere:**
+
+```bash
+# Save any text: URLs, tokens, paths, one-liners
+ka "https://internal.example.com/dashboard?token=abc123" -t url -s dash
+curl -s https://auth.example.com/token | jq -r .access_token | ka -t token -s tok
+
+# Recall and paste into any prompt or command
+kr dash               # prints raw text — ready to paste   (kr = koda raw)
+ks tok                # display with metadata              (ks = koda show)
+curl -H "Authorization: Bearer $(kr tok)" https://api.example.com/v1/data
+```
+
+With Turso configured, the same store is available on every machine:
+
+```bash
+# Machine A — save your public key once
+ka "$(cat ~/.ssh/id_ed25519.pub)" -t ssh -s pubkey
+
+# Machine B — retrieve it instantly, no file transfer needed
+kr pubkey
+```
+
+---
+
+**④ Pipe docker output in, retrieve immediately:**
 
 ```bash
 # kd a = koda add, kd r = koda raw  (kd prefix: alias kd='koda')
@@ -86,7 +113,6 @@ Single-letter aliases are reserved and cannot be used as entry shortcuts.
 | `-s` / `--shortcut` | Assign a memorable alias to an entry |
 | `-t` / `--tag` | Assign tags (on `add`) or filter by tag |
 | `-V` / `--var` | Variable substitution at recall time |
-- **Turso support**: Switch from local SQLite to a [Turso](https://turso.tech) remote database to share entries across machines.
 
 ## Installation
 
