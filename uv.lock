@@ -33,7 +33,7 @@ wheels = [
 ]
 
 [[package]]
-name = "koda"
+name = "koda-cli"
 version = "1.2.0"
 source = { editable = "." }
 dependencies = [

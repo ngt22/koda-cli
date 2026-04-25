@@ -35,7 +35,7 @@ except ImportError:
     _IntegrityErrors = (sqlite3.IntegrityError,)
 
 __app_name__ = "koda"
-__version__ = version("koda")
+__version__ = version("koda-cli")
 DATETIME_FMT = "%Y-%m-%d %H:%M:%S"
 
 
