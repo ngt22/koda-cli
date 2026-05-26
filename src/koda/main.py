@@ -21,6 +21,7 @@ from rich.console import Console
 from rich.table import Table
 
 from .db import MemoDatabase, DatabaseError, IntegrityErrors as _IntegrityErrors, VALID_SORT_COLUMNS
+from .models import MemoRow
 
 __app_name__ = "koda"
 __version__ = version("koda-cli")
@@ -465,7 +466,7 @@ def _strip_raw_inline_comments(content: str) -> str:
 def emit_raw(ref: Optional[str], vars: Optional[List[str]] = None) -> None:
     init_db()
     row = resolve_ref(ref)
-    content = _apply_vars(row[3] if row[3] is not None else "", vars)
+    content = _apply_vars(row.content if row.content is not None else "", vars)
     content = _strip_raw_inline_comments(content)
     sys.stdout.write(content)
 
@@ -513,10 +514,10 @@ def _pick_with_fzf(candidates) -> Optional[str]:
         raise typer.Exit(code=1)
 
     lines = []
-    for _, uid, idx, content, tags, shortcut, created_at in candidates:
-        first_line = (content or "").splitlines()[0] if content else ""
+    for row in candidates:
+        first_line = (row.content or "").splitlines()[0] if row.content else ""
         display = (
-            f"{idx}\t{uid}\t{shortcut or '-'}\t{tags or '-'}\t{created_at}\t{first_line}"
+            f"{row.idx}\t{row.uid}\t{row.shortcut or '-'}\t{row.tags or '-'}\t{row.created_at}\t{first_line}"
         )
         lines.append(display)
 
@@ -589,8 +590,7 @@ def _run_pick_action(action: str, ref: str) -> None:
     if action == "show":
         init_db()
         row = resolve_ref(ref)
-        _, uid, idx, content, tags, shortcut, created_at = row
-        _print_memo(uid, idx, shortcut, content, tags, created_at)
+        _print_memo(row.uid, row.idx, row.shortcut, row.content, row.tags, row.created_at)
         return
     if action == "edit":
         edit(ref)
@@ -622,8 +622,7 @@ def main(
         elif cmd == "show":
             init_db()
             row = resolve_ref(None)
-            _, uid, idx, content, tags, shortcut, created_at = row
-            _print_memo(uid, idx, shortcut, content, tags, created_at)
+            _print_memo(row.uid, row.idx, row.shortcut, row.content, row.tags, row.created_at)
         elif cmd == "add":
             _add_impl()
         else:
@@ -785,9 +784,8 @@ def rm(
         n = len(target_rows)
         console.print(f"\n[bold red]About to delete {n} entr{'y' if n == 1 else 'ies'}:[/bold red]")
         for row in target_rows[:10]:
-            _, uid, idx, content, _, _, _ = row
-            preview = (content or "").splitlines()[0][:60]
-            console.print(f"  [{idx}] ({uid}) {preview}")
+            preview = (row.content or "").splitlines()[0][:60]
+            console.print(f"  [{row.idx}] ({row.uid}) {preview}")
         if n > 10:
             console.print(f"  ... and {n - 10} more")
 
@@ -804,7 +802,7 @@ def rm(
                 console.print("[yellow]Cancelled.[/yellow]")
                 raise typer.Exit(code=0)
 
-        ids = [row[0] for row in target_rows]
+        ids = [row.id for row in target_rows]
         with db.connection() as conn:
             conn.executemany("DELETE FROM memos WHERE id = ?", [(id_,) for id_ in ids])
         console.print(f"[red]Deleted {n} entr{'y' if n == 1 else 'ies'}.[/red]")
@@ -812,8 +810,7 @@ def rm(
     else:
         ref = indices[0] if indices else None
         row = resolve_ref(ref)
-        memo_id, uid, idx, content, tags, shortcut, created_at = row
-        _print_memo(uid, idx, shortcut, content, tags, created_at)
+        _print_memo(row.uid, row.idx, row.shortcut, row.content, row.tags, row.created_at)
         console.print("\n[bold red]This entry will be deleted.[/bold red]")
 
         if not force:
@@ -831,9 +828,9 @@ def rm(
                 console.print("[yellow]Cancelled.[/yellow]")
                 raise typer.Exit(code=0)
 
-        db.delete_memo(memo_id)
-        preview = content.splitlines()[0][:50] if content else ""
-        console.print(f"[red]Deleted [{idx}]: {preview}...[/red]")
+        db.delete_memo(row.id)
+        preview = row.content.splitlines()[0][:50] if row.content else ""
+        console.print(f"[red]Deleted [{row.idx}]: {preview}...[/red]")
 
 
 @app.command(name="copy")
@@ -845,16 +842,15 @@ def copy(
     """Duplicate an entry to a new row (same body and tags, no shortcut). Alias: `koda c`."""
     init_db()
     row = resolve_ref(ref)
-    memo_id, uid, idx, content, tags, shortcut, created_at = row
     now = datetime.now().strftime(DATETIME_FMT)
-    new_uid = _generate_uid(content, now)
+    new_uid = _generate_uid(row.content or "", now)
     with db.connection() as conn:
         new_idx = MemoDatabase.next_idx(conn)
         conn.execute(
             "INSERT INTO memos (uid, idx, shortcut, content, tags, created_at, modified_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (new_uid, new_idx, None, content, tags, now, now)
+            (new_uid, new_idx, None, row.content, row.tags, now, now)
         )
-    console.print(f"[green]Copied [{idx}] → [{new_idx}] ({new_uid}).[/green]")
+    console.print(f"[green]Copied [{row.idx}] → [{new_idx}] ({new_uid}).[/green]")
 
 
 @app.command()
@@ -866,7 +862,10 @@ def edit(
     """Open an entry in $EDITOR (body plus tags/shortcut/metadata footer). Alias: `koda e`."""
     init_db()
     row = resolve_ref(ref)
-    memo_id, uid, idx, content, tags, shortcut, created_at = row
+    memo_id = row.id
+    content, tags, shortcut, created_at, idx = (
+        row.content, row.tags, row.shortcut, row.created_at, row.idx,
+    )
 
     sc_line = f"shortcut: {shortcut}" if shortcut else "shortcut: "
     template = f"{content}\n\n---\n# Metadata\ntags: {tags}\n{sc_line}\ncreated_at: {created_at}\n---"
@@ -1003,8 +1002,8 @@ def _list_memos_impl(
         table.add_column(label, **kwargs)
 
     row_values: dict = {}
-    for _, uid, idx, content, tags, sc, dt in memos:
-        content_lines = (content or "").splitlines()
+    for memo in memos:
+        content_lines = (memo.content or "").splitlines()
         if rows_value is None:
             preview_lines = content_lines if content_lines else [""]
         else:
@@ -1024,12 +1023,12 @@ def _list_memos_impl(
 
         preview = "\n".join(preview_lines)
         row_values = {
-            "idx": str(idx),
-            "uid": uid or "",
-            "sc": sc or "",
-            "tags": tags or "",
+            "idx": str(memo.idx),
+            "uid": memo.uid or "",
+            "sc": memo.shortcut or "",
+            "tags": memo.tags or "",
             "content": preview,
-            "created_at": dt,
+            "created_at": memo.created_at,
         }
         table.add_row(*[row_values[col] for col in columns])
     console.print(table)
@@ -1180,8 +1179,7 @@ def show(
 
     init_db()
     row = resolve_ref(ref)
-    memo_id, uid, idx, content, tags, shortcut, created_at = row
-    _print_memo(uid, idx, shortcut, content, tags, created_at)
+    _print_memo(row.uid, row.idx, row.shortcut, row.content, row.tags, row.created_at)
 
 
 @app.command()
@@ -1248,8 +1246,7 @@ def exec_memo(
 
     init_db()
     row = resolve_ref(ref)
-    memo_id, uid, idx, content, tags, shortcut, created_at = row
-    content = _apply_vars(content.strip() if content else "", vars)
+    content = _apply_vars(row.content.strip() if row.content else "", vars)
     shell = _config["exec"]["shell"]
     os.execvp(shell, [shell, "-c", content])
 
@@ -1584,8 +1581,11 @@ def _atomic_write_bytes(path: Path, data: bytes) -> None:
 def _shortcut_usable(conn, uid: str, shortcut: Optional[str]) -> Optional[str]:
     if shortcut is None or shortcut == "":
         return shortcut
-    row = conn.execute("SELECT uid FROM memos WHERE shortcut = ?", (shortcut,)).fetchone()
-    if row is None or row[0] == uid:
+    existing = conn.execute("SELECT uid FROM memos WHERE shortcut = ?", (shortcut,)).fetchone()
+    if existing is None:
+        return shortcut
+    (existing_uid,) = existing
+    if existing_uid == uid:
         return shortcut
     return None
 
@@ -1635,10 +1635,11 @@ def _merge_remote_sync_entries(entries: List[dict]) -> tuple[int, int, int, int]
             sc = raw_sc if raw_sc is None or raw_sc == "" else str(raw_sc)
 
             r_ts = _parse_memo_datetime(modified_at) or _parse_memo_datetime(created_at)
-            local = conn.execute(
-                "SELECT id, idx, shortcut, content, tags, created_at, modified_at FROM memos WHERE uid = ?",
+            local_row = conn.execute(
+                "SELECT id, uid, idx, content, tags, shortcut, created_at, modified_at FROM memos WHERE uid = ?",
                 (uid,),
             ).fetchone()
+            local = MemoRow.from_row(local_row)
             if local is None:
                 pick_idx = _pick_idx(conn, want_idx)
                 use_sc = _shortcut_usable(conn, uid, sc)
@@ -1671,9 +1672,8 @@ def _merge_remote_sync_entries(entries: List[dict]) -> tuple[int, int, int, int]
                             shortcut_dropped += 1
                 continue
 
-            memo_id = local[0]
-            l_created, l_modified = local[5], local[6]
-            l_ts = _parse_memo_datetime(l_modified) or _parse_memo_datetime(l_created)
+            memo_id = local.id
+            l_ts = _parse_memo_datetime(local.modified_at) or _parse_memo_datetime(local.created_at)
             if r_ts <= l_ts:
                 skipped += 1
                 continue

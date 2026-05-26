@@ -3,7 +3,9 @@
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Iterator, List, Optional
+
+from .models import MemoRow
 
 
 try:
@@ -127,6 +129,8 @@ class MemoDatabase:
             sql += " AND shortcut IS NOT NULL AND shortcut != ''"
         return sql, tuple(params)
 
+    _MEMO_COLUMNS = "id, uid, idx, content, tags, shortcut, created_at, modified_at"
+
     def get_memos(
         self,
         query=None,
@@ -137,17 +141,17 @@ class MemoDatabase:
         offset=0,
         sort_by="idx",
         desc=False,
-    ):
+    ) -> List[MemoRow]:
         order_column = sort_by if sort_by in VALID_SORT_COLUMNS else "idx"
         order_direction = "DESC" if desc else "ASC"
         where_sql, params = self._filters(query, tag, exclude_tag, shortcuts_only)
         sql = (
-            "SELECT id, uid, idx, content, tags, shortcut, created_at FROM memos"
+            f"SELECT {self._MEMO_COLUMNS} FROM memos"
             f"{where_sql} ORDER BY {order_column} {order_direction}, id ASC LIMIT ? OFFSET ?"
         )
         params = params + (limit, offset)
         with self.connection() as conn:
-            return conn.execute(sql, params).fetchall()
+            return [MemoRow.from_row(r) for r in conn.execute(sql, params).fetchall()]
 
     def get_memo_stats(self, query=None, tag=None, exclude_tag=None, shortcuts_only=False):
         where_sql, params = self._filters(query, tag, exclude_tag, shortcuts_only)
@@ -163,39 +167,48 @@ class MemoDatabase:
         shortcuts_only=False,
         sort_by="idx",
         desc=False,
-    ):
+    ) -> List[MemoRow]:
         order_column = sort_by if sort_by in VALID_SORT_COLUMNS else "idx"
         order_direction = "DESC" if desc else "ASC"
         where_sql, params = self._filters(query, tag, exclude_tag, shortcuts_only)
         sql = (
-            "SELECT id, uid, idx, content, tags, shortcut, created_at FROM memos"
+            f"SELECT {self._MEMO_COLUMNS} FROM memos"
             f"{where_sql} ORDER BY {order_column} {order_direction}, id ASC"
         )
         with self.connection() as conn:
-            return conn.execute(sql, params).fetchall()
+            return [MemoRow.from_row(r) for r in conn.execute(sql, params).fetchall()]
 
-    def get_latest_entry(self):
+    def get_latest_entry(self) -> Optional[MemoRow]:
         with self.connection() as conn:
-            return conn.execute(
-                "SELECT id, uid, idx, content, tags, shortcut, created_at "
-                "FROM memos ORDER BY created_at DESC, id DESC LIMIT 1"
+            row = conn.execute(
+                f"SELECT {self._MEMO_COLUMNS} FROM memos "
+                "ORDER BY created_at DESC, id DESC LIMIT 1"
             ).fetchone()
+        return MemoRow.from_row(row)
 
-    def get_memo_by_idx(self, idx: int):
+    def get_memo_by_idx(self, idx: int) -> Optional[MemoRow]:
         with self.connection() as conn:
-            return conn.execute(
-                "SELECT id, uid, idx, content, tags, shortcut, created_at "
-                "FROM memos WHERE idx = ?",
+            row = conn.execute(
+                f"SELECT {self._MEMO_COLUMNS} FROM memos WHERE idx = ?",
                 (idx,),
             ).fetchone()
+        return MemoRow.from_row(row)
 
-    def get_memo_by_shortcut(self, shortcut: str):
+    def get_memo_by_shortcut(self, shortcut: str) -> Optional[MemoRow]:
         with self.connection() as conn:
-            return conn.execute(
-                "SELECT id, uid, idx, content, tags, shortcut, created_at "
-                "FROM memos WHERE shortcut = ?",
+            row = conn.execute(
+                f"SELECT {self._MEMO_COLUMNS} FROM memos WHERE shortcut = ?",
                 (shortcut,),
             ).fetchone()
+        return MemoRow.from_row(row)
+
+    def get_memo_by_uid(self, uid: str) -> Optional[MemoRow]:
+        with self.connection() as conn:
+            row = conn.execute(
+                f"SELECT {self._MEMO_COLUMNS} FROM memos WHERE uid = ?",
+                (uid,),
+            ).fetchone()
+        return MemoRow.from_row(row)
 
     def add_memo(
         self,
