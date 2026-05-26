@@ -1,6 +1,5 @@
 import tomllib
 import typer
-import sqlite3
 import sys
 import hashlib
 import copy
@@ -14,7 +13,6 @@ import tempfile
 import re
 import signal
 import shutil
-from contextlib import contextmanager
 from datetime import datetime
 from importlib.metadata import version
 from pathlib import Path
@@ -22,17 +20,7 @@ from typing import Optional, List, Callable
 from rich.console import Console
 from rich.table import Table
 
-try:
-    import libsql_experimental as _libsql
-    _LIBSQL_AVAILABLE = True
-    try:
-        _IntegrityErrors = (sqlite3.IntegrityError, _libsql.IntegrityError)
-    except AttributeError:
-        _IntegrityErrors = (sqlite3.IntegrityError,)
-except ImportError:
-    _libsql = None
-    _LIBSQL_AVAILABLE = False
-    _IntegrityErrors = (sqlite3.IntegrityError,)
+from .db import MemoDatabase, DatabaseError, IntegrityErrors as _IntegrityErrors, VALID_SORT_COLUMNS
 
 __app_name__ = "koda"
 __version__ = version("koda-cli")
@@ -99,8 +87,6 @@ DEFAULT_DB_PATH = DEFAULT_DB_DIR / "koda.db"
 DEFAULT_CONFIG_DIR = Path(os.getenv("XDG_CONFIG_HOME", Path.home() / ".config")) / "koda"
 DEFAULT_CONFIG_PATH = DEFAULT_CONFIG_DIR / "config.toml"
 CONFIG_PATH = Path(os.getenv("KODA_CONFIG_PATH", DEFAULT_CONFIG_PATH))
-
-VALID_SORT_COLUMNS = {"id", "idx", "uid", "tags", "content", "created_at", "modified_at", "shortcut"}
 
 VALID_LIST_COLUMNS = ["idx", "uid", "sc", "tags", "content", "created_at"]
 REQUIRED_LIST_COLUMNS = {"idx"}
@@ -303,50 +289,12 @@ def _coerce_config_value(key: str, raw: str):
 _config, _config_sources = load_config()
 DB_PATH = Path(_config["db"]["path"]).expanduser()
 
-
-@contextmanager
-def _db_connection():
-    """Context manager that yields a DB connection for the configured backend."""
-    backend = _config["db"]["backend"]
-    if backend == "turso":
-        if not _LIBSQL_AVAILABLE:
-            console.print(
-                "[red]libsql-experimental is not installed. "
-                "Run: pip install libsql-experimental[/red]"
-            )
-            raise typer.Exit(code=1)
-        url = _config["turso"]["url"]
-        token = _config["turso"]["token"]
-        if not url:
-            console.print(
-                "[red]Turso URL is not configured. "
-                "Set turso.url in config or KODA_TURSO_URL env var.[/red]"
-            )
-            raise typer.Exit(code=1)
-        conn = _libsql.connect(url, auth_token=token or None)
-        try:
-            yield conn
-        except typer.Exit:
-            raise
-        except Exception:
-            raise
-        else:
-            conn.commit()
-        finally:
-            conn.close()
-    else:
-        conn = sqlite3.connect(DB_PATH)
-        try:
-            yield conn
-        except typer.Exit:
-            raise
-        except Exception:
-            conn.rollback()
-            raise
-        else:
-            conn.commit()
-        finally:
-            conn.close()
+db = MemoDatabase(
+    backend=_config["db"]["backend"],
+    path=DB_PATH,
+    turso_url=_config["turso"]["url"],
+    turso_token=_config["turso"]["token"],
+)
 
 
 def version_callback(value: bool):
@@ -366,118 +314,15 @@ def _generate_uid(content: str, created_at: str) -> str:
 
 def init_db():
     try:
-        if _config["db"]["backend"] == "local":
-            DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with _db_connection() as conn:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS memos (
-                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                    uid         TEXT UNIQUE,
-                    idx         INTEGER UNIQUE,
-                    shortcut    TEXT,
-                    content     TEXT,
-                    tags        TEXT,
-                    created_at  TIMESTAMP,
-                    modified_at TIMESTAMP
-                )
-            """)
-            cols = {row[1] for row in conn.execute("PRAGMA table_info(memos)").fetchall()}
-            if "shortcut" not in cols:
-                conn.execute("ALTER TABLE memos ADD COLUMN shortcut TEXT")
-            # Unique index allows NULL (multiple NULLs are OK), enforces uniqueness for non-NULL values
-            conn.execute(
-                "CREATE UNIQUE INDEX IF NOT EXISTS idx_memos_shortcut "
-                "ON memos(shortcut) WHERE shortcut IS NOT NULL"
-            )
+        db.init_db()
     except typer.Exit:
         raise
+    except DatabaseError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(code=1)
     except Exception as e:
         console.print(f"[red]Database Error:[/red] {e}")
         raise typer.Exit(code=1)
-
-
-def _next_idx(conn) -> int:
-    row = conn.execute("SELECT MAX(idx) FROM memos").fetchone()
-    return (row[0] + 1) if row[0] is not None else 0
-
-
-def _build_memo_filters(query=None, tag=None, exclude_tag=None, shortcuts_only=False):
-    sql = " WHERE 1=1"
-    params = []
-    if query:
-        sql += " AND content LIKE ?"
-        params.append(f"%{query}%")
-    if tag:
-        sql += " AND tags LIKE ?"
-        params.append(f"%{tag}%")
-    if exclude_tag:
-        sql += " AND (tags IS NULL OR tags = '' OR tags NOT LIKE ?)"
-        params.append(f"%{exclude_tag}%")
-    if shortcuts_only:
-        sql += " AND shortcut IS NOT NULL AND shortcut != ''"
-    return sql, tuple(params)
-
-
-def get_memos(
-    query=None,
-    tag=None,
-    exclude_tag=None,
-    shortcuts_only=False,
-    limit=20,
-    offset=0,
-    sort_by="idx",
-    desc=False,
-):
-    order_column = sort_by if sort_by in VALID_SORT_COLUMNS else "idx"
-    order_direction = "DESC" if desc else "ASC"
-    where_sql, params = _build_memo_filters(query, tag, exclude_tag, shortcuts_only)
-
-    sql = (
-        "SELECT id, uid, idx, content, tags, shortcut, created_at FROM memos"
-        f"{where_sql} ORDER BY {order_column} {order_direction}, id ASC LIMIT ? OFFSET ?"
-    )
-    params = params + (limit, offset)
-    with _db_connection() as conn:
-        return conn.execute(sql, params).fetchall()
-
-
-def get_memo_stats(query=None, tag=None, exclude_tag=None, shortcuts_only=False):
-    where_sql, params = _build_memo_filters(query, tag, exclude_tag, shortcuts_only)
-    sql = f"SELECT COUNT(*), MAX(idx) FROM memos{where_sql}"
-    with _db_connection() as conn:
-        total_count, max_idx = conn.execute(sql, params).fetchone()
-    return total_count, max_idx
-
-
-def get_memos_all(
-    query=None,
-    tag=None,
-    exclude_tag=None,
-    shortcuts_only=False,
-    sort_by="idx",
-    desc=False,
-):
-    order_column = sort_by if sort_by in VALID_SORT_COLUMNS else "idx"
-    order_direction = "DESC" if desc else "ASC"
-    where_sql, params = _build_memo_filters(query, tag, exclude_tag, shortcuts_only)
-    sql = (
-        "SELECT id, uid, idx, content, tags, shortcut, created_at FROM memos"
-        f"{where_sql} ORDER BY {order_column} {order_direction}, id ASC"
-    )
-    with _db_connection() as conn:
-        return conn.execute(sql, params).fetchall()
-
-
-def delete_memo(memo_id: int) -> None:
-    with _db_connection() as conn:
-        conn.execute("DELETE FROM memos WHERE id = ?", (memo_id,))
-
-
-def get_latest_entry():
-    with _db_connection() as conn:
-        return conn.execute(
-            "SELECT id, uid, idx, content, tags, shortcut, created_at FROM memos ORDER BY created_at DESC, id DESC LIMIT 1"
-        ).fetchone()
 
 
 def resolve_ref(ref: Optional[str]):
@@ -486,26 +331,18 @@ def resolve_ref(ref: Optional[str]):
     ref=None → latest; digit string → idx lookup; other string → shortcut lookup.
     """
     if ref is None:
-        row = get_latest_entry()
+        row = db.get_latest_entry()
         if row is None:
             console.print("[yellow]No entries in database.[/yellow]")
             raise typer.Exit(code=1)
         return row
     if ref.isdigit():
-        with _db_connection() as conn:
-            row = conn.execute(
-                "SELECT id, uid, idx, content, tags, shortcut, created_at FROM memos WHERE idx = ?",
-                (int(ref),)
-            ).fetchone()
+        row = db.get_memo_by_idx(int(ref))
         if row is None:
             console.print(f"[yellow]No entry at index {ref}.[/yellow]")
             raise typer.Exit(code=1)
         return row
-    with _db_connection() as conn:
-        row = conn.execute(
-            "SELECT id, uid, idx, content, tags, shortcut, created_at FROM memos WHERE shortcut = ?",
-            (ref,)
-        ).fetchone()
+    row = db.get_memo_by_shortcut(ref)
     if row is None:
         console.print(f"[yellow]No entry with shortcut {ref!r}.[/yellow]")
         raise typer.Exit(code=1)
@@ -657,7 +494,7 @@ def _pick_candidates(
         console.print(f"[red]Invalid --sort-by '{sort_by}'. Use one of: {valid}.[/red]")
         raise typer.Exit(code=1)
     effective_desc = cfg["desc"] if desc is None else desc
-    return get_memos_all(
+    return db.get_memos_all(
         query=query,
         tag=tag,
         exclude_tag=exclude_tag,
@@ -795,11 +632,7 @@ def main(
 
 def update_memo_full(memo_id: int, content: str, tags: str, shortcut: Optional[str], created_at: str):
     now = datetime.now().strftime(DATETIME_FMT)
-    with _db_connection() as conn:
-        conn.execute(
-            "UPDATE memos SET content = ?, tags = ?, shortcut = ?, created_at = ?, modified_at = ? WHERE id = ?",
-            (content.strip(), tags, shortcut or None, created_at, now, memo_id)
-        )
+    db.update_memo(memo_id, content, tags, shortcut, created_at, now)
 
 
 def _normalize_footer_segment(segment: str) -> str:
@@ -876,8 +709,8 @@ def _add_impl(
     now = datetime.now().strftime(DATETIME_FMT)
     uid = _generate_uid(content, now)
     try:
-        with _db_connection() as conn:
-            new_idx = _next_idx(conn)
+        with db.connection() as conn:
+            new_idx = MemoDatabase.next_idx(conn)
             conn.execute(
                 "INSERT INTO memos (uid, idx, shortcut, content, tags, created_at, modified_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (uid, new_idx, shortcut or None, content, formatted_tags, now, now)
@@ -935,23 +768,15 @@ def rm(
     if is_batch:
         if indices:
             idx_list = _parse_indices(indices)
-            with _db_connection() as conn:
-                target_rows = []
-                for idx in idx_list:
-                    row = conn.execute(
-                        "SELECT id, uid, idx, content, tags, shortcut, created_at FROM memos WHERE idx = ?", (idx,)
-                    ).fetchone()
-                    if row is None:
-                        console.print(f"[yellow]No entry at index {idx}, skipping.[/yellow]")
-                    else:
-                        target_rows.append(row)
+            target_rows = []
+            for idx in idx_list:
+                row = db.get_memo_by_idx(idx)
+                if row is None:
+                    console.print(f"[yellow]No entry at index {idx}, skipping.[/yellow]")
+                else:
+                    target_rows.append(row)
         else:
-            where_sql, params = _build_memo_filters(query=query, tag=tag)
-            with _db_connection() as conn:
-                target_rows = conn.execute(
-                    f"SELECT id, uid, idx, content, tags, shortcut, created_at FROM memos{where_sql} ORDER BY idx ASC",
-                    params,
-                ).fetchall()
+            target_rows = db.get_memos_all(query=query, tag=tag, sort_by="idx")
 
         if not target_rows:
             console.print("[yellow]No matching entries.[/yellow]")
@@ -980,7 +805,7 @@ def rm(
                 raise typer.Exit(code=0)
 
         ids = [row[0] for row in target_rows]
-        with _db_connection() as conn:
+        with db.connection() as conn:
             conn.executemany("DELETE FROM memos WHERE id = ?", [(id_,) for id_ in ids])
         console.print(f"[red]Deleted {n} entr{'y' if n == 1 else 'ies'}.[/red]")
 
@@ -1006,7 +831,7 @@ def rm(
                 console.print("[yellow]Cancelled.[/yellow]")
                 raise typer.Exit(code=0)
 
-        delete_memo(memo_id)
+        db.delete_memo(memo_id)
         preview = content.splitlines()[0][:50] if content else ""
         console.print(f"[red]Deleted [{idx}]: {preview}...[/red]")
 
@@ -1023,8 +848,8 @@ def copy(
     memo_id, uid, idx, content, tags, shortcut, created_at = row
     now = datetime.now().strftime(DATETIME_FMT)
     new_uid = _generate_uid(content, now)
-    with _db_connection() as conn:
-        new_idx = _next_idx(conn)
+    with db.connection() as conn:
+        new_idx = MemoDatabase.next_idx(conn)
         conn.execute(
             "INSERT INTO memos (uid, idx, shortcut, content, tags, created_at, modified_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (new_uid, new_idx, None, content, tags, now, now)
@@ -1144,7 +969,7 @@ def _list_memos_impl(
         raise typer.Exit(code=1)
     rows_value = None if parsed_rows == 0 else parsed_rows
 
-    total_count, max_idx = get_memo_stats(query, tag, exclude_tag, shortcuts_only)
+    total_count, max_idx = db.get_memo_stats(query, tag, exclude_tag, shortcuts_only)
     total_pages = (total_count + per_page - 1) // per_page if total_count else 0
 
     if total_pages > 0 and page > total_pages:
@@ -1157,7 +982,7 @@ def _list_memos_impl(
         raise typer.Exit(code=1)
 
     offset = (page - 1) * per_page
-    memos = get_memos(
+    memos = db.get_memos(
         query,
         tag,
         exclude_tag,
@@ -1446,7 +1271,7 @@ def tag(
     remove_list = _parse_tag_args(untag)
 
     updated = 0
-    with _db_connection() as conn:
+    with db.connection() as conn:
         for idx in idx_list:
             row = conn.execute("SELECT id, tags FROM memos WHERE idx = ?", (idx,)).fetchone()
             if row is None:
@@ -1699,7 +1524,7 @@ def _parse_git_sync_record(raw: object, lineno: int) -> dict:
 def _dump_git_sync_payload() -> bytes:
     """Export memos as UTF-8 JSON Lines, one object per line, sorted by uid (stable share format)."""
     _require_git_sync_wire_format()
-    with _db_connection() as conn:
+    with db.connection() as conn:
         rows = conn.execute(
             "SELECT uid, idx, shortcut, content, tags, created_at, modified_at "
             "FROM memos ORDER BY uid ASC, id ASC"
@@ -1768,7 +1593,7 @@ def _shortcut_usable(conn, uid: str, shortcut: Optional[str]) -> Optional[str]:
 def _pick_idx(conn, preferred: int) -> int:
     if conn.execute("SELECT 1 FROM memos WHERE idx = ?", (preferred,)).fetchone() is None:
         return preferred
-    return _next_idx(conn)
+    return MemoDatabase.next_idx(conn)
 
 
 def _apply_idx_for_row(conn, memo_id: int, preferred: int) -> None:
@@ -1779,13 +1604,13 @@ def _apply_idx_for_row(conn, memo_id: int, preferred: int) -> None:
     if occ is None:
         conn.execute("UPDATE memos SET idx = ? WHERE id = ?", (preferred, memo_id))
     else:
-        conn.execute("UPDATE memos SET idx = ? WHERE id = ?", (_next_idx(conn), memo_id))
+        conn.execute("UPDATE memos SET idx = ? WHERE id = ?", (MemoDatabase.next_idx(conn), memo_id))
 
 
 def _merge_remote_sync_entries(entries: List[dict]) -> tuple[int, int, int, int]:
     """Returns (inserted, updated, skipped, shortcut_dropped)."""
     inserted = updated = skipped = shortcut_dropped = 0
-    with _db_connection() as conn:
+    with db.connection() as conn:
         for rm in sorted(
             entries,
             key=lambda m: (
@@ -1827,7 +1652,7 @@ def _merge_remote_sync_entries(entries: List[dict]) -> tuple[int, int, int, int]
                     )
                     inserted += 1
                 except _IntegrityErrors:
-                    pick_idx = _next_idx(conn)
+                    pick_idx = MemoDatabase.next_idx(conn)
                     try:
                         conn.execute(
                             "INSERT INTO memos (uid, idx, shortcut, content, tags, created_at, modified_at) "
@@ -1874,7 +1699,7 @@ def move(
     init_db()
     if from_idx == to_idx:
         return
-    with _db_connection() as conn:
+    with db.connection() as conn:
         if conn.execute("SELECT 1 FROM memos WHERE idx = ?", (from_idx,)).fetchone() is None:
             console.print(f"[red]No entry at index {from_idx}.[/red]")
             raise typer.Exit(code=1)
@@ -1996,7 +1821,7 @@ def shift_cmd(
     init_db()
     if count == 0:
         return
-    with _db_connection() as conn:
+    with db.connection() as conn:
         if count < 0:
             if start + count < 0:
                 console.print(
@@ -2033,7 +1858,7 @@ def swap(
     init_db()
     if idx1 == idx2:
         return
-    with _db_connection() as conn:
+    with db.connection() as conn:
         a = conn.execute("SELECT id FROM memos WHERE idx = ?", (idx1,)).fetchone()
         b = conn.execute("SELECT id FROM memos WHERE idx = ?", (idx2,)).fetchone()
         if a is None:
@@ -2053,7 +1878,7 @@ def swap(
 def compact_indices():
     """Fill index gaps by reassigning idx to contiguous values from 0. Alias: `koda k`."""
     init_db()
-    with _db_connection() as conn:
+    with db.connection() as conn:
         rows = conn.execute("SELECT id, idx FROM memos ORDER BY idx ASC, id ASC").fetchall()
         if not rows:
             console.print("[yellow]No entries in database.[/yellow]")
