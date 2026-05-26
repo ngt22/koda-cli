@@ -1,10 +1,7 @@
-import tomllib
 import typer
 import sys
 import hashlib
-import copy
 import csv
-import json
 from click.utils import make_str
 from typer.core import TyperGroup
 import os
@@ -16,13 +13,25 @@ import shutil
 from datetime import datetime
 from importlib.metadata import version
 from pathlib import Path
-from typing import Optional, List, Callable
+from typing import Optional, List
 from rich.console import Console
 from rich.table import Table
 
-from .db import MemoDatabase, DatabaseError, IntegrityErrors as _IntegrityErrors, VALID_SORT_COLUMNS
+from .db import MemoDatabase, DatabaseError, IntegrityErrors as _IntegrityErrors
 from .models import MemoRow
 from .cli_utils import ExitCode, confirm, exit_error
+from .config import (
+    ALL_KEYS as _ALL_KEYS,
+    COLUMN_DEFS,
+    CONFIG_PATH,
+    Config,
+    ConfigManager,
+    DEFAULT_DB_PATH,
+    GIT_SYNC_FORMAT_JSONL,
+    VALID_LIST_COLUMNS,
+    VALID_SORT_COLUMNS,
+    ValidationError,
+)
 
 __app_name__ = "koda"
 __version__ = version("koda-cli")
@@ -58,7 +67,7 @@ class KodaGroup(TyperGroup):
             if cmd_name in ALIASES:
                 args = [ALIASES[cmd_name]] + list(args[1:])
             elif self.get_command(ctx, cmd_name) is None and not cmd_name.startswith("-"):
-                default_cmd = _config["defaults"]["cmd"]
+                default_cmd = config.defaults_cmd
                 target_name = ALIASES.get(default_cmd, default_cmd)
                 target_cmd = self.get_command(ctx, target_name)
                 if target_cmd is not None:
@@ -81,217 +90,15 @@ app = typer.Typer(
 )
 console = Console()
 
-# ── Database path ─────────────────────────────────────────────────────────────
-DEFAULT_DB_DIR = Path.home() / ".local" / "share" / "koda"
-DEFAULT_DB_PATH = DEFAULT_DB_DIR / "koda.db"
-
-# ── Config ────────────────────────────────────────────────────────────────────
-DEFAULT_CONFIG_DIR = Path(os.getenv("XDG_CONFIG_HOME", Path.home() / ".config")) / "koda"
-DEFAULT_CONFIG_PATH = DEFAULT_CONFIG_DIR / "config.toml"
-CONFIG_PATH = Path(os.getenv("KODA_CONFIG_PATH", DEFAULT_CONFIG_PATH))
-
-VALID_LIST_COLUMNS = ["idx", "uid", "sc", "tags", "content", "created_at"]
-REQUIRED_LIST_COLUMNS = {"idx"}
-
-COLUMN_DEFS: dict = {
-    "idx":        ("IDX",        {"justify": "right", "width": 4}),
-    "uid":        ("UID",        {"width": 7, "style": "dim"}),
-    "sc":         ("SC",         {"width": 10, "style": "bold green"}),
-    "tags":       ("Tags",       {"style": "magenta", "width": 15}),
-    "content":    ("Content",    {"ratio": 1}),
-    "created_at": ("Created At", {"width": 19}),
-}
-
-CONFIG_DEFAULTS: dict = {
-    "defaults": {"cmd": "raw"},
-    "list":     {"per_page": 20, "rows": 1, "truncate": 80, "sort_by": "idx", "desc": False, "columns": ["idx", "sc", "tags", "content"]},
-    "db":       {"path": str(DEFAULT_DB_PATH), "backend": "local"},
-    "turso":    {"url": "", "token": ""},
-    # Git sync: local clone root, JSONL payload path (relative), and wire format key.
-    # One UTF-8 line per memo, JSON object, sorted by uid on export. For sharing across machines, not merge workflows.
-    "git":      {"sync_path": "", "payload_file": "koda-sync.jsonl", "sync_format": "jsonl"},
-    "exec":     {"shell": "sh"},
-}
-
-GIT_SYNC_FORMAT_JSONL = "jsonl"
-
-_ALL_KEYS: set[str] = {
-    f"{sec}.{k}" for sec, vals in CONFIG_DEFAULTS.items() for k in vals
-}
-
-_CONFIG_TYPES: dict[str, type] = {
-    "defaults.cmd":  str,
-    "list.per_page": int,
-    "list.rows":     int,
-    "list.truncate": int,
-    "list.sort_by":  str,
-    "list.desc":     bool,
-    "list.columns":  list,
-    "db.path":       str,
-    "db.backend":    str,
-    "turso.url":     str,
-    "turso.token":   str,
-    "git.sync_path": str,
-    "git.payload_file": str,
-    "git.sync_format": str,
-    "exec.shell":    str,
-}
-
-_CONFIG_VALIDATORS: dict[str, tuple[Callable, str]] = {
-    "defaults.cmd":  (lambda v: v in ("raw", "list", "show", "add"), "must be 'raw', 'list', 'show', or 'add'"),
-    "list.per_page": (lambda v: v >= 1,                       "must be >= 1"),
-    "list.rows":     (lambda v: v >= 0,                       "must be >= 0"),
-    "list.truncate": (lambda v: v >= 0,                       "must be >= 0"),
-    "list.sort_by":  (
-        lambda v: v in VALID_SORT_COLUMNS,
-        f"must be one of: {', '.join(sorted(VALID_SORT_COLUMNS))}",
-    ),
-    "list.columns": (
-        lambda v: (
-            isinstance(v, list)
-            and len(v) > 0
-            and all(c in VALID_LIST_COLUMNS for c in v)
-            and REQUIRED_LIST_COLUMNS.issubset(v)
-        ),
-        f'must include "idx"; available: {", ".join(VALID_LIST_COLUMNS)}',
-    ),
-    "db.backend":    (lambda v: v in ("local", "turso"), "must be 'local' or 'turso'"),
-    "git.sync_path": (lambda v: True, ""),
-    "git.payload_file": (
-        lambda v: (
-            isinstance(v, str)
-            and len(v.strip()) > 0
-            and not Path(v).is_absolute()
-            and ".." not in Path(v).parts
-        ),
-        "must be a non-empty path relative to git.sync_path without '..' components",
-    ),
-    "git.sync_format": (
-        lambda v: str(v).strip().lower() == GIT_SYNC_FORMAT_JSONL,
-        f"must be {GIT_SYNC_FORMAT_JSONL!r} (case-insensitive)",
-    ),
-}
-
-
-def load_config() -> tuple[dict, dict]:
-    """Return (merged_config, source_map). source_map[dotkey] = 'default'|'file'|'env'."""
-    config = copy.deepcopy(CONFIG_DEFAULTS)
-    sources: dict[str, str] = {
-        f"{sec}.{key}": "default"
-        for sec, vals in CONFIG_DEFAULTS.items()
-        for key in vals
-    }
-
-    if CONFIG_PATH.exists():
-        try:
-            with open(CONFIG_PATH, "rb") as f:
-                file_data = tomllib.load(f)
-            for sec, vals in file_data.items():
-                if sec in config and isinstance(vals, dict):
-                    for key, val in vals.items():
-                        if key in config[sec]:
-                            config[sec][key] = val
-                            sources[f"{sec}.{key}"] = "file"
-        except Exception as e:
-            console.print(f"[yellow]Warning: could not read config: {e}[/yellow]")
-
-    env_cmd = os.getenv("KODA_DEFAULT_CMD")
-    if env_cmd:
-        config["defaults"]["cmd"] = env_cmd
-        sources["defaults.cmd"] = "env"
-
-    env_db = os.getenv("KODA_DB_PATH")
-    if env_db:
-        config["db"]["path"] = env_db
-        sources["db.path"] = "env"
-
-    env_turso_url = os.getenv("KODA_TURSO_URL")
-    if env_turso_url:
-        config["turso"]["url"] = env_turso_url
-        sources["turso.url"] = "env"
-
-    env_turso_token = os.getenv("KODA_TURSO_TOKEN")
-    if env_turso_token:
-        config["turso"]["token"] = env_turso_token
-        sources["turso.token"] = "env"
-
-    env_git_sync = os.getenv("KODA_GIT_SYNC_PATH")
-    if env_git_sync:
-        config["git"]["sync_path"] = env_git_sync
-        sources["git.sync_path"] = "env"
-
-    env_git_payload = os.getenv("KODA_GIT_PAYLOAD_FILE")
-    if env_git_payload:
-        config["git"]["payload_file"] = env_git_payload
-        sources["git.payload_file"] = "env"
-
-    env_git_format = os.getenv("KODA_GIT_SYNC_FORMAT")
-    if env_git_format:
-        config["git"]["sync_format"] = env_git_format.strip().lower()
-        sources["git.sync_format"] = "env"
-
-    return config, sources
-
-
-def _read_config_file() -> dict:
-    """Read the config file as-is (no merging with defaults). Returns {} if absent."""
-    if not CONFIG_PATH.exists():
-        return {}
-    try:
-        with open(CONFIG_PATH, "rb") as f:
-            return tomllib.load(f)
-    except Exception as e:
-        exit_error(f"Could not read config file: {e}")
-
-
-def _write_config_file(data: dict) -> None:
-    """Serialize data to TOML and write to CONFIG_PATH."""
-    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    lines: list[str] = []
-    for section, values in data.items():
-        lines.append(f"[{section}]")
-        for k, v in values.items():
-            if isinstance(v, bool):
-                lines.append(f"{k} = {'true' if v else 'false'}")
-            elif isinstance(v, list):
-                items = ", ".join(f'"{c}"' for c in v)
-                lines.append(f"{k} = [{items}]")
-            elif isinstance(v, str):
-                lines.append(f'{k} = "{v}"')
-            else:
-                lines.append(f"{k} = {v}")
-        lines.append("")
-    CONFIG_PATH.write_text("\n".join(lines), encoding="utf-8")
-
-
-def _coerce_config_value(key: str, raw: str):
-    typ = _CONFIG_TYPES.get(key, str)
-    try:
-        if typ is bool:
-            if raw.lower() in ("true", "1", "yes"):
-                return True
-            elif raw.lower() in ("false", "0", "no"):
-                return False
-            else:
-                raise ValueError(raw)
-        if typ is list:
-            parsed = json.loads(raw)
-            if not isinstance(parsed, list):
-                raise ValueError(raw)
-            return parsed
-        return typ(raw)
-    except (ValueError, TypeError, json.JSONDecodeError):
-        exit_error(f"Invalid value for {key!r}: {raw!r} (expected {typ.__name__})")
-
-
-_config, _config_sources = load_config()
-DB_PATH = Path(_config["db"]["path"]).expanduser()
+_config_manager = ConfigManager()
+config, _config_sources = _config_manager.load()
+DB_PATH = Path(config.db_path).expanduser()
 
 db = MemoDatabase(
-    backend=_config["db"]["backend"],
+    backend=config.db_backend,
     path=DB_PATH,
-    turso_url=_config["turso"]["url"],
-    turso_token=_config["turso"]["token"],
+    turso_url=config.turso_url,
+    turso_token=config.turso_token,
 )
 
 
@@ -476,12 +283,11 @@ def _pick_candidates(
     sort_by: Optional[str],
     desc: Optional[bool],
 ):
-    cfg = _config["list"]
-    effective_sort = (sort_by or cfg["sort_by"]).lower()
+    effective_sort = (sort_by or config.list_sort_by).lower()
     if effective_sort not in VALID_SORT_COLUMNS:
         valid = ", ".join(sorted(VALID_SORT_COLUMNS))
         exit_error(f"Invalid --sort-by '{sort_by}'. Use one of: {valid}.")
-    effective_desc = cfg["desc"] if desc is None else desc
+    effective_desc = config.list_desc if desc is None else desc
     return db.get_memos_all(
         query=query,
         tag=tag,
@@ -556,7 +362,7 @@ def _resolve_pick_action(
         exit_error("--print-id/-p cannot be combined with action flags.")
     if selected:
         return selected[0]
-    default_cmd = _config["defaults"]["cmd"]
+    default_cmd = config.defaults_cmd
     if default_cmd in ("raw", "show"):
         return default_cmd
     console.print("[dim]Hint: use --exec/-x, --edit/-e, --raw/-r, or --show/-s.[/dim]")
@@ -595,7 +401,7 @@ def main(
 ):
     """Default: run the default command (see `koda config get defaults.cmd`)."""
     if ctx.invoked_subcommand is None:
-        cmd = _config["defaults"]["cmd"]
+        cmd = config.defaults_cmd
         if cmd == "list":
             _list_memos_impl()
         elif cmd == "show":
@@ -888,21 +694,20 @@ def _list_memos_impl(
 ) -> None:
     init_db()
 
-    cfg = _config["list"]
     if columns is None:
-        columns = cfg["columns"]
+        columns = config.list_columns
     if per_page is None:
-        per_page = cfg["per_page"]
+        per_page = config.list_per_page
     elif per_page < 1:
         exit_error("--per-page must be >= 1.")
     if sort_by is None:
-        sort_by = cfg["sort_by"]
+        sort_by = config.list_sort_by
     if desc is None:
-        desc = cfg["desc"]
+        desc = config.list_desc
     if rows is None:
-        rows = str(cfg["rows"])
+        rows = str(config.list_rows)
     if truncate is None:
-        truncate = cfg["truncate"]
+        truncate = config.list_truncate
     elif truncate < 0:
         exit_error("--truncate must be 0 or greater.")
 
@@ -1040,9 +845,10 @@ def list_memos(
     parsed_columns: Optional[List[str]] = None
     if columns is not None:
         parsed_columns = [c.strip() for c in columns.split(",") if c.strip()]
-        validator, msg = _CONFIG_VALIDATORS["list.columns"]
-        if not validator(parsed_columns):
-            exit_error(f"Invalid --columns: {msg}")
+        try:
+            ConfigManager.validate("list.columns", parsed_columns)
+        except ValidationError:
+            exit_error(f"Invalid --columns: {ConfigManager.error_message('list.columns')}")
     _list_memos_impl(query, tag, exclude_tag, shortcuts_only, per_page, page, sort_by, desc, rows, truncate, parsed_columns)
 
 
@@ -1194,7 +1000,7 @@ def exec_memo(
     init_db()
     row = resolve_ref(ref)
     content = _apply_vars(row.content.strip() if row.content else "", vars)
-    shell = _config["exec"]["shell"]
+    shell = config.exec_shell
     os.execvp(shell, [shell, "-c", content])
 
 
@@ -1243,7 +1049,7 @@ def _require_git_cli() -> None:
 
 
 def _resolve_git_sync_root() -> Path:
-    raw = (_config["git"]["sync_path"] or "").strip()
+    raw = (config.git_sync_path or "").strip()
     if not raw:
         exit_error(
             "git.sync_path is empty. Set [git] sync_path in config or KODA_GIT_SYNC_PATH "
@@ -1256,7 +1062,7 @@ def _resolve_git_sync_root() -> Path:
 
 
 def _resolve_git_payload_path(sync_root: Path) -> Path:
-    rel = (_config["git"]["payload_file"] or "").strip()
+    rel = (config.git_payload_file or "").strip()
     if not rel:
         rel = "koda-sync.jsonl"
     rel_path = Path(rel)
@@ -1390,7 +1196,7 @@ def _git_push_if_remote(sync_root: Path) -> None:
 
 
 def _require_git_sync_wire_format() -> None:
-    fmt = (_config["git"].get("sync_format") or "").strip().lower()
+    fmt = (config.git_sync_format or "").strip().lower()
     if fmt != GIT_SYNC_FORMAT_JSONL:
         exit_error(
             f"git.sync_format must be {GIT_SYNC_FORMAT_JSONL!r} (JSON Lines). "
@@ -1855,14 +1661,12 @@ def config_show(ctx: typer.Context) -> None:
         "file":    "[green]file[/green]",
         "env":     "[cyan]env[/cyan]",
     }
-    for sec, vals in CONFIG_DEFAULTS.items():
-        for subkey in vals:
-            dotkey = f"{sec}.{subkey}"
-            val = _config[sec][subkey]
-            src = _config_sources.get(dotkey, "default")
-            label = src_labels.get(src, "[dim]default[/dim]")
-            display_val = "****" if dotkey == "turso.token" and val else str(val)
-            console.print(f"  {dotkey:<{key_width}} = {display_val:<24} {label}")
+    for dotkey in _ALL_KEYS:
+        val = ConfigManager.get(config, dotkey)
+        src = _config_sources.get(dotkey, "default")
+        label = src_labels.get(src, "[dim]default[/dim]")
+        display_val = "****" if dotkey == "turso.token" and val else str(val)
+        console.print(f"  {dotkey:<{key_width}} = {display_val:<24} {label}")
 
 
 @config_app.command("get")
@@ -1874,8 +1678,7 @@ def config_get(
         exit_error(
             f"Unknown key: {key!r}. Valid keys: {', '.join(sorted(_ALL_KEYS))}"
         )
-    sec, subkey = key.split(".", 1)
-    sys.stdout.write(str(_config[sec][subkey]) + "\n")
+    sys.stdout.write(str(ConfigManager.get(config, key)) + "\n")
 
 
 @config_app.command("set")
@@ -1888,18 +1691,20 @@ def config_set_cmd(
         exit_error(
             f"Unknown key: {key!r}. Valid keys: {', '.join(sorted(_ALL_KEYS))}"
         )
-    coerced = _coerce_config_value(key, value)
-    validator = _CONFIG_VALIDATORS.get(key)
-    if validator:
-        fn, msg = validator
-        if not fn(coerced):
-            exit_error(f"Invalid value for {key!r}: {msg}")
+    try:
+        coerced = ConfigManager.coerce(key, value)
+        ConfigManager.validate(key, coerced)
+    except ValidationError as e:
+        exit_error(str(e))
     sec, subkey = key.split(".", 1)
-    file_data = _read_config_file()
+    try:
+        file_data = _config_manager.read_raw()
+    except ValidationError as e:
+        exit_error(str(e))
     if sec not in file_data:
         file_data[sec] = {}
     file_data[sec][subkey] = coerced
-    _write_config_file(file_data)
+    _config_manager.write_raw(file_data)
     console.print(f"[green]Set {key} = {coerced!r}[/green]")
 
 
@@ -1913,15 +1718,18 @@ def config_unset(
             f"Unknown key: {key!r}. Valid keys: {', '.join(sorted(_ALL_KEYS))}"
         )
     sec, subkey = key.split(".", 1)
-    file_data = _read_config_file()
+    try:
+        file_data = _config_manager.read_raw()
+    except ValidationError as e:
+        exit_error(str(e))
     if sec not in file_data or subkey not in file_data[sec]:
         console.print(f"[yellow]{key} is not set in the config file.[/yellow]")
         return
     del file_data[sec][subkey]
     if not file_data[sec]:
         del file_data[sec]
-    _write_config_file(file_data)
-    default_val = CONFIG_DEFAULTS[sec][subkey]
+    _config_manager.write_raw(file_data)
+    default_val = ConfigManager.default_for(key)
     console.print(f"[green]Unset {key} (reverts to default: {default_val!r})[/green]")
 
 
