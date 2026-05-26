@@ -97,6 +97,13 @@ _config_manager = ConfigManager()
 config, _config_sources = _config_manager.load()
 DB_PATH = Path(config.db_path).expanduser()
 
+
+def _validate_list_columns(columns: List[str], source: str) -> None:
+    try:
+        ConfigManager.validate("list.columns", columns)
+    except ValidationError:
+        exit_error(f"Invalid {source}: {ConfigManager.error_message('list.columns')}")
+
 db = MemoDatabase(
     backend=config.db_backend,
     path=DB_PATH,
@@ -526,6 +533,7 @@ def _list_memos_impl(
 
     if columns is None:
         columns = config.list_columns
+        _validate_list_columns(columns, "list.columns")
     if per_page is None:
         per_page = config.list_per_page
     elif per_page < 1:
@@ -675,10 +683,7 @@ def list_memos(
     parsed_columns: Optional[List[str]] = None
     if columns is not None:
         parsed_columns = [c.strip() for c in columns.split(",") if c.strip()]
-        try:
-            ConfigManager.validate("list.columns", parsed_columns)
-        except ValidationError:
-            exit_error(f"Invalid --columns: {ConfigManager.error_message('list.columns')}")
+        _validate_list_columns(parsed_columns, "--columns")
     _list_memos_impl(query, tag, exclude_tag, shortcuts_only, per_page, page, sort_by, desc, rows, truncate, parsed_columns)
 
 
