@@ -1,15 +1,11 @@
 import typer
 import sys
 import hashlib
-import csv
-from click.utils import make_str
 from typer.core import TyperGroup
 import os
 import subprocess
 import tempfile
 import re
-import signal
-import shutil
 from datetime import datetime
 from importlib.metadata import version
 from pathlib import Path
@@ -18,13 +14,11 @@ from rich.console import Console
 from rich.table import Table
 
 from .db import MemoDatabase, DatabaseError, IntegrityErrors as _IntegrityErrors
-from .models import MemoRow
-from .cli_utils import ExitCode, confirm, exit_error
+from .cli_utils import confirm, exit_error
 from .config import (
     ALL_KEYS as _ALL_KEYS,
     COLUMN_DEFS,
     CONFIG_PATH,
-    Config,
     ConfigManager,
     DEFAULT_DB_PATH,
     GIT_SYNC_FORMAT_JSONL,
@@ -72,7 +66,7 @@ class KodaGroup(TyperGroup):
 
     def resolve_command(self, ctx, args):
         if args:
-            cmd_name = make_str(args[0])
+            cmd_name = str(args[0])
             if cmd_name in ALIASES:
                 args = [ALIASES[cmd_name]] + list(args[1:])
             elif self.get_command(ctx, cmd_name) is None and not cmd_name.startswith("-"):
@@ -115,10 +109,6 @@ def version_callback(value: bool):
     if value:
         console.print(f"{__app_name__} version: [bold cyan]{__version__}[/bold cyan]")
         raise typer.Exit()
-
-
-def signal_handler(sig, frame):
-    sys.exit(0)
 
 
 def _generate_uid(content: str, created_at: str) -> str:
@@ -1244,9 +1234,4 @@ def config_path_cmd() -> None:
 
 
 if __name__ == "__main__":
-    signal.signal(signal.SIGINT, signal_handler)
-    try:
-        app()
-    except Exception as e:
-        console.print(f"[red]Fatal Error:[/red] {e}")
-        sys.exit(1)
+    app()
