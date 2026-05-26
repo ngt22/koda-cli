@@ -9,9 +9,11 @@ wheels/
 # Virtual environments
 .venv
 
-# Claude Code
+# AI coding agents
+AGENTS.md
 CLAUDE.md
 .claude/
+opencode.json
 
 # Editor / IDE
 .vscode/
