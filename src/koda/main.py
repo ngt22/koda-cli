@@ -32,6 +32,14 @@ from .config import (
     VALID_SORT_COLUMNS,
     ValidationError,
 )
+from .cmd_helpers.display import print_memo as _print_memo
+from .cmd_helpers.metadata import first_footer_index, last_footer_segment
+from .cmd_helpers.parsing import parse_indices, parse_tag_args, parse_var_items
+from .cmd_helpers.interactive import (
+    pick_candidates,
+    pick_with_fzf,
+    resolve_pick_action,
+)
 
 __app_name__ = "koda"
 __version__ = version("koda-cli")
@@ -149,46 +157,10 @@ def resolve_ref(ref: Optional[str]):
     return row
 
 
-def _parse_indices(specs: List[str]) -> List[int]:
-    result = []
-    for spec in specs:
-        m = re.fullmatch(r'(\d+)-(\d+)', spec)
-        if m:
-            result.extend(range(int(m.group(1)), int(m.group(2)) + 1))
-        elif spec.isdigit():
-            result.append(int(spec))
-        else:
-            exit_error(f"Invalid index or range: {spec!r}")
-    return result
-
-
-def _print_memo(uid, idx, shortcut, content, tags, created_at) -> None:
-    sc_str = f" | SC: [bold green]{shortcut}[/bold green]" if shortcut else ""
-    console.print(
-        f"\n[bold cyan]IDX: {idx}[/bold cyan] ({uid}){sc_str} | {created_at}\n"
-        f"Tags: [magenta]{tags}[/magenta]\n"
-        + "-" * 20
-        + f"\n{content}"
-    )
-
-
-def _parse_tag_args(tag_args: Optional[List[str]]) -> List[str]:
-    result = []
-    for t in (tag_args or []):
-        result.extend(item.strip() for item in t.split(",") if item.strip())
-    return result
-
-
 def _validate_shortcut(shortcut: Optional[str]) -> Optional[str]:
     if shortcut and len(shortcut) == 1 and shortcut in RESERVED_SHORTCUTS:
         exit_error(f"Shortcut {shortcut!r} is reserved as a 1-letter subcommand alias.")
     return shortcut
-
-
-def _parse_var_items(var_spec: str) -> List[str]:
-    """Parse a var spec into items using CSV rules: comma-delimited, "..." for quoting."""
-    reader = csv.reader([var_spec], quotechar='"', delimiter=',', skipinitialspace=True)
-    return list(reader)[0]
 
 
 def _apply_vars(content: str, vars: Optional[List[str]]) -> str:
@@ -202,7 +174,7 @@ def _apply_vars(content: str, vars: Optional[List[str]]) -> str:
             key, value = m.group(1), m.group(2)
             content = content.replace(f"${{{key}}}", value)
         else:
-            for item in _parse_var_items(stripped):
+            for item in parse_var_items(stripped):
                 content = re.sub(rf'\${pos_index}(?!\d)', item.replace('\\', '\\\\'), content)
                 pos_index += 1
     return content
@@ -275,100 +247,6 @@ def _read_stdin_refs() -> List[str]:
         return []
     return [part for part in data.split() if part]
 
-def _pick_candidates(
-    query: Optional[str],
-    tag: Optional[str],
-    exclude_tag: Optional[str],
-    shortcuts_only: bool,
-    sort_by: Optional[str],
-    desc: Optional[bool],
-):
-    effective_sort = (sort_by or config.list_sort_by).lower()
-    if effective_sort not in VALID_SORT_COLUMNS:
-        valid = ", ".join(sorted(VALID_SORT_COLUMNS))
-        exit_error(f"Invalid --sort-by '{sort_by}'. Use one of: {valid}.")
-    effective_desc = config.list_desc if desc is None else desc
-    return db.get_memos_all(
-        query=query,
-        tag=tag,
-        exclude_tag=exclude_tag,
-        shortcuts_only=shortcuts_only,
-        sort_by=effective_sort,
-        desc=effective_desc,
-    )
-
-def _pick_with_fzf(candidates) -> Optional[str]:
-    if shutil.which("fzf") is None:
-        exit_error("fzf is not installed. Install fzf to use `koda pick`.")
-
-    if not sys.stdin.isatty():
-        exit_error("`koda pick` requires an interactive TTY.")
-
-    lines = []
-    for row in candidates:
-        first_line = (row.content or "").splitlines()[0] if row.content else ""
-        display = (
-            f"{row.idx}\t{row.uid}\t{row.shortcut or '-'}\t{row.tags or '-'}\t{row.created_at}\t{first_line}"
-        )
-        lines.append(display)
-
-    term_cols = shutil.get_terminal_size(fallback=(120, 40)).columns
-    # Keep list area readable on narrower terminals by switching to bottom preview.
-    preview_window = "right:55%:wrap" if term_cols >= 170 else "down:55%:wrap"
-
-    proc = subprocess.run(
-        [
-            "fzf",
-            "--delimiter", "\t",
-            "--with-nth", "1,3,4,6",
-            "--prompt", "koda> ",
-            "--preview",
-            "printf 'IDX: %s\\nUID: %s\\nSC: %s\\nTags: %s\\nCreated: %s\\n\\n%s\\n' {1} {2} {3} {4} {5} {6}",
-            "--preview-window", preview_window,
-        ],
-        input="\n".join(lines),
-        text=True,
-        stdout=subprocess.PIPE,
-    )
-    if proc.returncode != 0:
-        return None
-
-    selected = proc.stdout.strip()
-    if not selected:
-        return None
-    return selected.split("\t", 1)[0].strip()
-
-
-def _resolve_pick_action(
-    edit_mode: bool,
-    exec_mode: bool,
-    raw_mode: bool,
-    show_mode: bool,
-    print_id: bool,
-) -> str:
-    selected = [
-        name
-        for enabled, name in (
-            (edit_mode, "edit"),
-            (exec_mode, "exec"),
-            (raw_mode, "raw"),
-            (show_mode, "show"),
-        )
-        if enabled
-    ]
-    if len(selected) > 1:
-        exit_error("Use only one of --edit/-e, --exec/-x, --raw/-r, or --show/-s.")
-    if print_id and selected:
-        exit_error("--print-id/-p cannot be combined with action flags.")
-    if selected:
-        return selected[0]
-    default_cmd = config.defaults_cmd
-    if default_cmd in ("raw", "show"):
-        return default_cmd
-    console.print("[dim]Hint: use --exec/-x, --edit/-e, --raw/-r, or --show/-s.[/dim]")
-    exit_error("defaults.cmd must be 'raw' or 'show' for `koda pick` without action flags.")
-
-
 def _run_pick_action(action: str, ref: str) -> None:
     if action == "raw":
         emit_raw(ref)
@@ -419,45 +297,6 @@ def update_memo_full(memo_id: int, content: str, tags: str, shortcut: Optional[s
     db.update_memo(memo_id, content, tags, shortcut, created_at, now)
 
 
-def _normalize_footer_segment(segment: str) -> str:
-    lines = segment.strip().splitlines()
-    i = 0
-    while i < len(lines):
-        t = lines[i].strip()
-        if not t:
-            i += 1
-            continue
-        if re.fullmatch(r"-{3,}", t):
-            i += 1
-            continue
-        break
-    return "\n".join(lines[i:]).strip()
-
-
-def _looks_like_koda_footer(segment: str) -> bool:
-    s = _normalize_footer_segment(segment)
-    if not s:
-        return False
-    if s.startswith("# Metadata"):
-        return True
-    lines = [ln for ln in s.splitlines() if ln.strip()]
-    return bool(lines and lines[0].strip().startswith("tags:"))
-
-
-def _first_footer_index(parts: List[str]) -> Optional[int]:
-    for i in range(1, len(parts)):
-        if _looks_like_koda_footer(parts[i]):
-            return i
-    return None
-
-
-def _last_footer_segment(parts: List[str]) -> Optional[str]:
-    for seg in reversed(parts):
-        if _looks_like_koda_footer(seg):
-            return _normalize_footer_segment(seg)
-    return None
-
-
 def _add_impl(
     text: Optional[List[str]] = None,
     tag: Optional[List[str]] = None,
@@ -488,7 +327,7 @@ def _add_impl(
 
     content = content.encode('utf-8', 'surrogateescape').decode('utf-8', 'ignore')
 
-    formatted_tags = ",".join(dict.fromkeys(_parse_tag_args(tag)))
+    formatted_tags = ",".join(dict.fromkeys(parse_tag_args(tag)))
 
     now = datetime.now().strftime(DATETIME_FMT)
     uid = _generate_uid(content, now)
@@ -549,7 +388,7 @@ def rm(
 
     if is_batch:
         if indices:
-            idx_list = _parse_indices(indices)
+            idx_list = parse_indices(indices)
             target_rows = []
             for idx in idx_list:
                 row = db.get_memo_by_idx(idx)
@@ -649,10 +488,10 @@ def edit(
         while parts and not parts[-1].strip():
             parts.pop()
 
-        footer_at = _first_footer_index(parts)
+        footer_at = first_footer_index(parts)
         if footer_at is not None:
             new_content = "\n---\n".join(parts[:footer_at]).strip()
-            meta_section = _last_footer_segment(parts) or ""
+            meta_section = last_footer_segment(parts) or ""
             new_tags, new_shortcut, new_created_at = tags, shortcut, created_at
             for line in meta_section.splitlines():
                 if line.startswith("tags:"):
@@ -893,16 +732,16 @@ def pick(
     if print_id and (edit_mode or exec_mode or raw_mode or show_mode):
         exit_error("--print-id/-p cannot be combined with action flags.")
 
-    action: Optional[str] = None if print_id else _resolve_pick_action(
-        edit_mode, exec_mode, raw_mode, show_mode, print_id
+    action: Optional[str] = None if print_id else resolve_pick_action(
+        config, edit_mode, exec_mode, raw_mode, show_mode, print_id
     )
 
     init_db()
-    candidates = _pick_candidates(query, tag, exclude_tag, shortcuts_only, sort_by, desc)
+    candidates = pick_candidates(db, config, query, tag, exclude_tag, shortcuts_only, sort_by, desc)
     if not candidates:
         exit_error("No entries found.", style="yellow")
 
-    selected_ref = _pick_with_fzf(candidates)
+    selected_ref = pick_with_fzf(candidates)
     if selected_ref is None:
         raise typer.Exit(code=0)
 
@@ -1015,9 +854,9 @@ def tag(
         exit_error("Specify at least one of -t/--tag (add) or -T/--untag (remove).")
 
     init_db()
-    idx_list = _parse_indices(indices)
-    add_list = _parse_tag_args(tags)
-    remove_list = _parse_tag_args(untag)
+    idx_list = parse_indices(indices)
+    add_list = parse_tag_args(tags)
+    remove_list = parse_tag_args(untag)
 
     updated = 0
     with db.connection() as conn:
