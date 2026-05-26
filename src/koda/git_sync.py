@@ -11,13 +11,11 @@ from rich.console import Console
 
 from .cli_utils import exit_error
 from .config import Config, GIT_SYNC_FORMAT_JSONL
+from .constants import DATETIME_FMT
 from .db import IntegrityErrors, MemoDatabase
 
 
 console = Console()
-
-
-DATETIME_FMT = "%Y-%m-%d %H:%M:%S"
 
 
 # ── Top-level helpers ────────────────────────────────────────────────────────

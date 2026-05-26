@@ -5,6 +5,7 @@ import re
 from typing import List, Optional
 
 from ..cli_utils import exit_error
+from ..constants import TAG_SEPARATOR
 
 
 def parse_indices(specs: List[str]) -> List[int]:
@@ -23,7 +24,7 @@ def parse_indices(specs: List[str]) -> List[int]:
 def parse_tag_args(tag_args: Optional[List[str]]) -> List[str]:
     result: List[str] = []
     for t in (tag_args or []):
-        result.extend(item.strip() for item in t.split(",") if item.strip())
+        result.extend(item.strip() for item in t.split(TAG_SEPARATOR) if item.strip())
     return result
 
 

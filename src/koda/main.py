@@ -41,10 +41,10 @@ from .cmd_helpers.interactive import (
     resolve_pick_action,
 )
 from . import git_sync
+from .constants import DATETIME_FMT, IDX_TEMP_OFFSET, TAG_SEPARATOR
 
 __app_name__ = "koda"
 __version__ = version("koda-cli")
-DATETIME_FMT = "%Y-%m-%d %H:%M:%S"
 
 
 ALIASES = {
@@ -328,7 +328,7 @@ def _add_impl(
 
     content = content.encode('utf-8', 'surrogateescape').decode('utf-8', 'ignore')
 
-    formatted_tags = ",".join(dict.fromkeys(parse_tag_args(tag)))
+    formatted_tags = TAG_SEPARATOR.join(dict.fromkeys(parse_tag_args(tag)))
 
     now = datetime.now().strftime(DATETIME_FMT)
     uid = _generate_uid(content, now)
@@ -867,10 +867,13 @@ def tag(
                 console.print(f"[yellow]No entry at index {idx}, skipping.[/yellow]")
                 continue
             row_id, current_tags = row
-            current = [t for t in (current_tags or "").split(",") if t.strip()]
+            current = [t for t in (current_tags or "").split(TAG_SEPARATOR) if t.strip()]
             new_tags = [t for t in current if t not in remove_list]
             new_tags = new_tags + [t for t in add_list if t not in new_tags]
-            conn.execute("UPDATE memos SET tags = ? WHERE id = ?", (",".join(new_tags), row_id))
+            conn.execute(
+                "UPDATE memos SET tags = ? WHERE id = ?",
+                (TAG_SEPARATOR.join(new_tags), row_id),
+            )
             updated += 1
 
     parts = []
@@ -1027,11 +1030,12 @@ def shift_cmd(
                     f"entries exist in [{start + count}, {start - 1}]."
                 )
         # Two-step update to avoid UNIQUE constraint violations during bulk shift
-        OFFSET = 2_000_000
-        conn.execute("UPDATE memos SET idx = idx + ? WHERE idx >= ?", (OFFSET, start))
+        conn.execute(
+            "UPDATE memos SET idx = idx + ? WHERE idx >= ?", (IDX_TEMP_OFFSET, start),
+        )
         conn.execute(
             "UPDATE memos SET idx = idx - ? + ? WHERE idx >= ?",
-            (OFFSET, count, OFFSET + start),
+            (IDX_TEMP_OFFSET, count, IDX_TEMP_OFFSET + start),
         )
     console.print(f"[green]Shifted entries from index {start} by {count:+d}.[/green]")
 
