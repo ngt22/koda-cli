@@ -22,6 +22,7 @@ from rich.table import Table
 
 from .db import MemoDatabase, DatabaseError, IntegrityErrors as _IntegrityErrors, VALID_SORT_COLUMNS
 from .models import MemoRow
+from .cli_utils import ExitCode, confirm, exit_error
 
 __app_name__ = "koda"
 __version__ = version("koda-cli")
@@ -240,8 +241,7 @@ def _read_config_file() -> dict:
         with open(CONFIG_PATH, "rb") as f:
             return tomllib.load(f)
     except Exception as e:
-        console.print(f"[red]Could not read config file: {e}[/red]")
-        raise typer.Exit(code=1)
+        exit_error(f"Could not read config file: {e}")
 
 
 def _write_config_file(data: dict) -> None:
@@ -281,10 +281,7 @@ def _coerce_config_value(key: str, raw: str):
             return parsed
         return typ(raw)
     except (ValueError, TypeError, json.JSONDecodeError):
-        console.print(
-            f"[red]Invalid value for {key!r}: {raw!r} (expected {typ.__name__})[/red]"
-        )
-        raise typer.Exit(code=1)
+        exit_error(f"Invalid value for {key!r}: {raw!r} (expected {typ.__name__})")
 
 
 _config, _config_sources = load_config()
@@ -319,11 +316,9 @@ def init_db():
     except typer.Exit:
         raise
     except DatabaseError as e:
-        console.print(f"[red]{e}[/red]")
-        raise typer.Exit(code=1)
+        exit_error(str(e))
     except Exception as e:
-        console.print(f"[red]Database Error:[/red] {e}")
-        raise typer.Exit(code=1)
+        exit_error(f"Database Error: {e}")
 
 
 def resolve_ref(ref: Optional[str]):
@@ -334,19 +329,16 @@ def resolve_ref(ref: Optional[str]):
     if ref is None:
         row = db.get_latest_entry()
         if row is None:
-            console.print("[yellow]No entries in database.[/yellow]")
-            raise typer.Exit(code=1)
+            exit_error("No entries in database.", style="yellow")
         return row
     if ref.isdigit():
         row = db.get_memo_by_idx(int(ref))
         if row is None:
-            console.print(f"[yellow]No entry at index {ref}.[/yellow]")
-            raise typer.Exit(code=1)
+            exit_error(f"No entry at index {ref}.", style="yellow")
         return row
     row = db.get_memo_by_shortcut(ref)
     if row is None:
-        console.print(f"[yellow]No entry with shortcut {ref!r}.[/yellow]")
-        raise typer.Exit(code=1)
+        exit_error(f"No entry with shortcut {ref!r}.", style="yellow")
     return row
 
 
@@ -359,8 +351,7 @@ def _parse_indices(specs: List[str]) -> List[int]:
         elif spec.isdigit():
             result.append(int(spec))
         else:
-            console.print(f"[red]Invalid index or range: {spec!r}[/red]")
-            raise typer.Exit(code=1)
+            exit_error(f"Invalid index or range: {spec!r}")
     return result
 
 
@@ -383,10 +374,7 @@ def _parse_tag_args(tag_args: Optional[List[str]]) -> List[str]:
 
 def _validate_shortcut(shortcut: Optional[str]) -> Optional[str]:
     if shortcut and len(shortcut) == 1 and shortcut in RESERVED_SHORTCUTS:
-        console.print(
-            f"[red]Shortcut {shortcut!r} is reserved as a 1-letter subcommand alias.[/red]"
-        )
-        raise typer.Exit(code=1)
+        exit_error(f"Shortcut {shortcut!r} is reserved as a 1-letter subcommand alias.")
     return shortcut
 
 
@@ -492,8 +480,7 @@ def _pick_candidates(
     effective_sort = (sort_by or cfg["sort_by"]).lower()
     if effective_sort not in VALID_SORT_COLUMNS:
         valid = ", ".join(sorted(VALID_SORT_COLUMNS))
-        console.print(f"[red]Invalid --sort-by '{sort_by}'. Use one of: {valid}.[/red]")
-        raise typer.Exit(code=1)
+        exit_error(f"Invalid --sort-by '{sort_by}'. Use one of: {valid}.")
     effective_desc = cfg["desc"] if desc is None else desc
     return db.get_memos_all(
         query=query,
@@ -506,12 +493,10 @@ def _pick_candidates(
 
 def _pick_with_fzf(candidates) -> Optional[str]:
     if shutil.which("fzf") is None:
-        console.print("[red]fzf is not installed. Install fzf to use `koda pick`.[/red]")
-        raise typer.Exit(code=1)
+        exit_error("fzf is not installed. Install fzf to use `koda pick`.")
 
     if not sys.stdin.isatty():
-        console.print("[red]`koda pick` requires an interactive TTY.[/red]")
-        raise typer.Exit(code=1)
+        exit_error("`koda pick` requires an interactive TTY.")
 
     lines = []
     for row in candidates:
@@ -566,21 +551,16 @@ def _resolve_pick_action(
         if enabled
     ]
     if len(selected) > 1:
-        console.print("[red]Use only one of --edit/-e, --exec/-x, --raw/-r, or --show/-s.[/red]")
-        raise typer.Exit(code=1)
+        exit_error("Use only one of --edit/-e, --exec/-x, --raw/-r, or --show/-s.")
     if print_id and selected:
-        console.print("[red]--print-id/-p cannot be combined with action flags.[/red]")
-        raise typer.Exit(code=1)
+        exit_error("--print-id/-p cannot be combined with action flags.")
     if selected:
         return selected[0]
     default_cmd = _config["defaults"]["cmd"]
     if default_cmd in ("raw", "show"):
         return default_cmd
-    console.print(
-        "[red]defaults.cmd must be 'raw' or 'show' for `koda pick` without action flags.[/red]"
-    )
     console.print("[dim]Hint: use --exec/-x, --edit/-e, --raw/-r, or --show/-s.[/dim]")
-    raise typer.Exit(code=1)
+    exit_error("defaults.cmd must be 'raw' or 'show' for `koda pick` without action flags.")
 
 
 def _run_pick_action(action: str, ref: str) -> None:
@@ -598,8 +578,7 @@ def _run_pick_action(action: str, ref: str) -> None:
     if action == "exec":
         exec_memo(ref, None)
         return
-    console.print(f"[red]Unsupported pick action: {action}[/red]")
-    raise typer.Exit(code=1)
+    exit_error(f"Unsupported pick action: {action}")
 
 
 @app.callback(invoke_without_command=True)
@@ -715,8 +694,7 @@ def _add_impl(
                 (uid, new_idx, shortcut or None, content, formatted_tags, now, now)
             )
     except _IntegrityErrors:
-        console.print(f"[red]Shortcut {shortcut!r} is already in use.[/red]")
-        raise typer.Exit(code=1)
+        exit_error(f"Shortcut {shortcut!r} is already in use.")
 
     sc_str = f" sc=[bold green]{shortcut}[/bold green]" if shortcut else ""
     console.print(f"[green]Saved [{new_idx}] ({uid}) tags: {formatted_tags}{sc_str}[/green]")
@@ -758,8 +736,7 @@ def rm(
 ):
     """Delete entries. Defaults to latest; supports ranges, -t, -q, and --all for batch. Alias: `koda d`."""
     if all_entries and not force:
-        console.print("[red]--all requires -f/--force.[/red]")
-        raise typer.Exit(code=1)
+        exit_error("--all requires -f/--force.")
 
     init_db()
     is_batch = bool(tag or query or all_entries or (indices and (len(indices) > 1 or re.search(r'\d-\d', indices[0]))))
@@ -789,18 +766,9 @@ def rm(
         if n > 10:
             console.print(f"  ... and {n - 10} more")
 
-        if not force:
-            if not sys.stdin.isatty():
-                console.print("[red]Not a TTY: use -f/--force to skip the prompt.[/red]")
-                raise typer.Exit(code=1)
-            try:
-                reply = input(f"\nDelete {n} entr{'y' if n == 1 else 'ies'}? [y/N]: ").strip().lower()
-            except EOFError:
-                console.print("\n[yellow]Cancelled.[/yellow]")
-                raise typer.Exit(code=0)
-            if reply not in ("y", "yes"):
-                console.print("[yellow]Cancelled.[/yellow]")
-                raise typer.Exit(code=0)
+        if not force and not confirm(f"\nDelete {n} entr{'y' if n == 1 else 'ies'}?"):
+            console.print("[yellow]Cancelled.[/yellow]")
+            raise typer.Exit(code=0)
 
         ids = [row.id for row in target_rows]
         with db.connection() as conn:
@@ -813,20 +781,9 @@ def rm(
         _print_memo(row.uid, row.idx, row.shortcut, row.content, row.tags, row.created_at)
         console.print("\n[bold red]This entry will be deleted.[/bold red]")
 
-        if not force:
-            if not sys.stdin.isatty():
-                console.print(
-                    "[red]Not a TTY: use [bold]-f/--force[/bold] to delete without a prompt.[/red]"
-                )
-                raise typer.Exit(code=1)
-            try:
-                reply = input("Delete this entry? [y/N]: ").strip().lower()
-            except EOFError:
-                console.print("\n[yellow]Cancelled.[/yellow]")
-                raise typer.Exit(code=0)
-            if reply not in ("y", "yes"):
-                console.print("[yellow]Cancelled.[/yellow]")
-                raise typer.Exit(code=0)
+        if not force and not confirm("Delete this entry?"):
+            console.print("[yellow]Cancelled.[/yellow]")
+            raise typer.Exit(code=0)
 
         db.delete_memo(row.id)
         preview = row.content.splitlines()[0][:50] if row.content else ""
@@ -904,8 +861,7 @@ def edit(
             try:
                 update_memo_full(memo_id, new_content, new_tags, new_shortcut, new_created_at)
             except _IntegrityErrors:
-                console.print(f"[red]Shortcut {new_shortcut!r} is already in use.[/red]")
-                raise typer.Exit(code=1)
+                exit_error(f"Shortcut {new_shortcut!r} is already in use.")
             console.print(f"[green]Entry [{idx}] updated.[/green]")
         else:
             new_content = "\n---\n".join(parts).strip() if parts else new_data.strip()
@@ -938,8 +894,7 @@ def _list_memos_impl(
     if per_page is None:
         per_page = cfg["per_page"]
     elif per_page < 1:
-        console.print("[red]--per-page must be >= 1.[/red]")
-        raise typer.Exit(code=1)
+        exit_error("--per-page must be >= 1.")
     if sort_by is None:
         sort_by = cfg["sort_by"]
     if desc is None:
@@ -949,14 +904,12 @@ def _list_memos_impl(
     if truncate is None:
         truncate = cfg["truncate"]
     elif truncate < 0:
-        console.print("[red]--truncate must be 0 or greater.[/red]")
-        raise typer.Exit(code=1)
+        exit_error("--truncate must be 0 or greater.")
 
     normalized_sort = sort_by.lower()
     if normalized_sort not in VALID_SORT_COLUMNS:
         valid = ", ".join(sorted(VALID_SORT_COLUMNS))
-        console.print(f"[red]Invalid --sort-by '{sort_by}'. Use one of: {valid}.[/red]")
-        raise typer.Exit(code=1)
+        exit_error(f"Invalid --sort-by '{sort_by}'. Use one of: {valid}.")
 
     rows_value: Optional[int]
     try:
@@ -964,8 +917,7 @@ def _list_memos_impl(
         if parsed_rows < 0:
             raise ValueError
     except ValueError:
-        console.print("[red]--rows must be an integer of 0 or greater.[/red]")
-        raise typer.Exit(code=1)
+        exit_error("--rows must be an integer of 0 or greater.")
     rows_value = None if parsed_rows == 0 else parsed_rows
 
     total_count, max_idx = db.get_memo_stats(query, tag, exclude_tag, shortcuts_only)
@@ -1090,8 +1042,7 @@ def list_memos(
         parsed_columns = [c.strip() for c in columns.split(",") if c.strip()]
         validator, msg = _CONFIG_VALIDATORS["list.columns"]
         if not validator(parsed_columns):
-            console.print(f"[red]Invalid --columns: {msg}[/red]")
-            raise typer.Exit(code=1)
+            exit_error(f"Invalid --columns: {msg}")
     _list_memos_impl(query, tag, exclude_tag, shortcuts_only, per_page, page, sort_by, desc, rows, truncate, parsed_columns)
 
 
@@ -1134,8 +1085,7 @@ def pick(
 ):
     """Pick an entry with fzf, then run an action (or print IDX). Alias: `koda p`."""
     if print_id and (edit_mode or exec_mode or raw_mode or show_mode):
-        console.print("[red]--print-id/-p cannot be combined with action flags.[/red]")
-        raise typer.Exit(code=1)
+        exit_error("--print-id/-p cannot be combined with action flags.")
 
     action: Optional[str] = None if print_id else _resolve_pick_action(
         edit_mode, exec_mode, raw_mode, show_mode, print_id
@@ -1144,8 +1094,7 @@ def pick(
     init_db()
     candidates = _pick_candidates(query, tag, exclude_tag, shortcuts_only, sort_by, desc)
     if not candidates:
-        console.print("[yellow]No entries found.[/yellow]")
-        raise typer.Exit(code=1)
+        exit_error("No entries found.", style="yellow")
 
     selected_ref = _pick_with_fzf(candidates)
     if selected_ref is None:
@@ -1172,8 +1121,7 @@ def show(
     if ref is None:
         stdin_refs = _read_stdin_refs()
         if len(stdin_refs) > 1:
-            console.print("[red]show accepts one ref from stdin. Got multiple values.[/red]")
-            raise typer.Exit(code=1)
+            exit_error("show accepts one ref from stdin. Got multiple values.")
         if stdin_refs:
             ref = stdin_refs[0]
 
@@ -1239,8 +1187,7 @@ def exec_memo(
     if ref is None:
         stdin_refs = _read_stdin_refs()
         if len(stdin_refs) > 1:
-            console.print("[red]ex accepts one ref from stdin. Got multiple values.[/red]")
-            raise typer.Exit(code=1)
+            exit_error("ex accepts one ref from stdin. Got multiple values.")
         if stdin_refs:
             ref = stdin_refs[0]
 
@@ -1259,8 +1206,7 @@ def tag(
 ):
     """Add or remove tags on one or more entries. Supports ranges (e.g. 2-5). Alias: `koda t`."""
     if not tags and not untag:
-        console.print("[red]Specify at least one of -t/--tag (add) or -T/--untag (remove).[/red]")
-        raise typer.Exit(code=1)
+        exit_error("Specify at least one of -t/--tag (add) or -T/--untag (remove).")
 
     init_db()
     idx_list = _parse_indices(indices)
@@ -1293,22 +1239,19 @@ def tag(
 
 def _require_git_cli() -> None:
     if shutil.which("git") is None:
-        console.print("[red]git not found. Install Git and ensure it is on PATH.[/red]")
-        raise typer.Exit(code=1)
+        exit_error("git not found. Install Git and ensure it is on PATH.")
 
 
 def _resolve_git_sync_root() -> Path:
     raw = (_config["git"]["sync_path"] or "").strip()
     if not raw:
-        console.print(
-            "[red]git.sync_path is empty. Set [git] sync_path in config or KODA_GIT_SYNC_PATH "
-            "(path to your local clone of the sync repository).[/red]"
+        exit_error(
+            "git.sync_path is empty. Set [git] sync_path in config or KODA_GIT_SYNC_PATH "
+            "(path to your local clone of the sync repository)."
         )
-        raise typer.Exit(code=1)
     root = Path(raw).expanduser().resolve()
     if not root.is_dir():
-        console.print(f"[red]git.sync_path is not a directory: {root}[/red]")
-        raise typer.Exit(code=1)
+        exit_error(f"git.sync_path is not a directory: {root}")
     return root
 
 
@@ -1321,8 +1264,7 @@ def _resolve_git_payload_path(sync_root: Path) -> Path:
     try:
         payload.relative_to(sync_root)
     except ValueError:
-        console.print("[red]git.payload_file must stay inside git.sync_path.[/red]")
-        raise typer.Exit(code=1)
+        exit_error("git.payload_file must stay inside git.sync_path.")
     return payload
 
 
@@ -1333,8 +1275,7 @@ def _ensure_git_worktree(sync_root: Path) -> None:
         text=True,
     )
     if r.returncode != 0 or (r.stdout or "").strip() != "true":
-        console.print(f"[red]Not a Git working tree: {sync_root}[/red]")
-        raise typer.Exit(code=1)
+        exit_error(f"Not a Git working tree: {sync_root}")
 
 
 def _git_has_remote(sync_root: Path) -> bool:
@@ -1390,14 +1331,12 @@ def _git_pull_rebase_if_remote(sync_root: Path) -> None:
         return
     remote = _git_preferred_remote(sync_root)
     if not remote:
-        console.print("[red]No Git remote resolved for pull in the sync clone.[/red]")
-        raise typer.Exit(code=1)
+        exit_error("No Git remote resolved for pull in the sync clone.")
     branch = _git_branch_show_current(sync_root)
     if not branch:
-        console.print(
-            "[red]Cannot git pull in detached HEAD in the sync clone. Check out a branch, then retry.[/red]"
+        exit_error(
+            "Cannot git pull in detached HEAD in the sync clone. Check out a branch, then retry."
         )
-        raise typer.Exit(code=1)
     if _git_has_upstream(sync_root):
         cmd: List[str] = ["git", "-C", str(sync_root), "pull", "--rebase"]
     else:
@@ -1424,14 +1363,12 @@ def _git_push_if_remote(sync_root: Path) -> None:
         return
     remote = _git_preferred_remote(sync_root)
     if not remote:
-        console.print("[red]No Git remote resolved for push in the sync clone.[/red]")
-        raise typer.Exit(code=1)
+        exit_error("No Git remote resolved for push in the sync clone.")
     branch = _git_branch_show_current(sync_root)
     if not branch:
-        console.print(
-            "[red]Cannot git push in detached HEAD in the sync clone. Check out a branch, then retry.[/red]"
+        exit_error(
+            "Cannot git push in detached HEAD in the sync clone. Check out a branch, then retry."
         )
-        raise typer.Exit(code=1)
     if _git_has_upstream(sync_root):
         cmd: List[str] = ["git", "-C", str(sync_root), "push"]
     else:
@@ -1444,7 +1381,9 @@ def _git_push_if_remote(sync_root: Path) -> None:
             text=True,
         )
     except subprocess.CalledProcessError as e:
-        console.print("[red]git push failed. Configure upstream/remotes or run push from that clone manually.[/red]")
+        console.print(
+            "[red]git push failed. Configure upstream/remotes or run push from that clone manually.[/red]"
+        )
         if e.stderr:
             console.print(f"[dim]{e.stderr.strip()}[/dim]")
         raise typer.Exit(code=1)
@@ -1453,11 +1392,10 @@ def _git_push_if_remote(sync_root: Path) -> None:
 def _require_git_sync_wire_format() -> None:
     fmt = (_config["git"].get("sync_format") or "").strip().lower()
     if fmt != GIT_SYNC_FORMAT_JSONL:
-        console.print(
-            f"[red]git.sync_format must be {GIT_SYNC_FORMAT_JSONL!r} (JSON Lines). "
-            f"Set git.sync_format or KODA_GIT_SYNC_FORMAT.[/red]"
+        exit_error(
+            f"git.sync_format must be {GIT_SYNC_FORMAT_JSONL!r} (JSON Lines). "
+            f"Set git.sync_format or KODA_GIT_SYNC_FORMAT."
         )
-        raise typer.Exit(code=1)
 
 
 def _parse_memo_datetime(s: Optional[str]) -> datetime:
@@ -1701,8 +1639,7 @@ def move(
         return
     with db.connection() as conn:
         if conn.execute("SELECT 1 FROM memos WHERE idx = ?", (from_idx,)).fetchone() is None:
-            console.print(f"[red]No entry at index {from_idx}.[/red]")
-            raise typer.Exit(code=1)
+            exit_error(f"No entry at index {from_idx}.")
         if conn.execute("SELECT 1 FROM memos WHERE idx = ?", (to_idx,)).fetchone() is not None:
             console.print(f"[red]Index {to_idx} is already occupied.[/red]")
             console.print(
@@ -1731,14 +1668,12 @@ def push(
 
     if payload_file is not None:
         if not payload_file.is_file():
-            console.print(f"[red]--file does not exist: {payload_file}[/red]")
-            raise typer.Exit(code=1)
+            exit_error(f"--file does not exist: {payload_file}")
         data = payload_file.read_bytes()
         try:
             _ = _load_git_sync_payload(data)
         except Exception as e:
-            console.print(f"[red]Invalid sync payload: {e}[/red]")
-            raise typer.Exit(code=1)
+            exit_error(f"Invalid sync payload: {e}")
     else:
         data = _dump_git_sync_payload()
 
@@ -1783,8 +1718,7 @@ def pull(
     _require_git_sync_wire_format()
     if local_payload_path is not None:
         if not local_payload_path.is_file():
-            console.print(f"[red]--file does not exist: {local_payload_path}[/red]")
-            raise typer.Exit(code=1)
+            exit_error(f"--file does not exist: {local_payload_path}")
         data = local_payload_path.read_bytes()
     else:
         _require_git_cli()
@@ -1793,15 +1727,13 @@ def pull(
         payload_path = _resolve_git_payload_path(sync_root)
         _git_pull_rebase_if_remote(sync_root)
         if not payload_path.is_file():
-            console.print(f"[red]Payload file missing after pull: {payload_path}[/red]")
-            raise typer.Exit(code=1)
+            exit_error(f"Payload file missing after pull: {payload_path}")
         data = payload_path.read_bytes()
 
     try:
         rows = _load_git_sync_payload(data)
     except Exception as e:
-        console.print(f"[red]Invalid sync payload: {e}[/red]")
-        raise typer.Exit(code=1)
+        exit_error(f"Invalid sync payload: {e}")
 
     ins, upd, skp, dsc = _merge_remote_sync_entries(rows)
     tail = f", [yellow]{dsc}[/yellow] shortcut(s) dropped (conflicts with local shortcuts)" if dsc else ""
@@ -1824,21 +1756,19 @@ def shift_cmd(
     with db.connection() as conn:
         if count < 0:
             if start + count < 0:
-                console.print(
-                    f"[red]Cannot shift down by {abs(count)}: "
-                    f"index {start} would become {start + count} (negative indices not allowed).[/red]"
+                exit_error(
+                    f"Cannot shift down by {abs(count)}: "
+                    f"index {start} would become {start + count} (negative indices not allowed)."
                 )
-                raise typer.Exit(code=1)
             collision = conn.execute(
                 "SELECT 1 FROM memos WHERE idx >= ? AND idx < ?",
                 (start + count, start),
             ).fetchone()
             if collision:
-                console.print(
-                    f"[red]Cannot shift down by {abs(count)}: "
-                    f"entries exist in [{start + count}, {start - 1}].[/red]"
+                exit_error(
+                    f"Cannot shift down by {abs(count)}: "
+                    f"entries exist in [{start + count}, {start - 1}]."
                 )
-                raise typer.Exit(code=1)
         # Two-step update to avoid UNIQUE constraint violations during bulk shift
         OFFSET = 2_000_000
         conn.execute("UPDATE memos SET idx = idx + ? WHERE idx >= ?", (OFFSET, start))
@@ -1862,11 +1792,9 @@ def swap(
         a = conn.execute("SELECT id FROM memos WHERE idx = ?", (idx1,)).fetchone()
         b = conn.execute("SELECT id FROM memos WHERE idx = ?", (idx2,)).fetchone()
         if a is None:
-            console.print(f"[red]No entry at index {idx1}.[/red]")
-            raise typer.Exit(code=1)
+            exit_error(f"No entry at index {idx1}.")
         if b is None:
-            console.print(f"[red]No entry at index {idx2}.[/red]")
-            raise typer.Exit(code=1)
+            exit_error(f"No entry at index {idx2}.")
         # Use -1 as temp to avoid UNIQUE constraint conflict
         conn.execute("UPDATE memos SET idx = -1 WHERE id = ?", (a[0],))
         conn.execute("UPDATE memos SET idx = ? WHERE id = ?", (idx1, b[0]))
@@ -1943,10 +1871,9 @@ def config_get(
 ) -> None:
     """Print a single config value (plain text, for scripting)."""
     if key not in _ALL_KEYS:
-        console.print(
-            f"[red]Unknown key: {key!r}. Valid keys: {', '.join(sorted(_ALL_KEYS))}[/red]"
+        exit_error(
+            f"Unknown key: {key!r}. Valid keys: {', '.join(sorted(_ALL_KEYS))}"
         )
-        raise typer.Exit(code=1)
     sec, subkey = key.split(".", 1)
     sys.stdout.write(str(_config[sec][subkey]) + "\n")
 
@@ -1958,17 +1885,15 @@ def config_set_cmd(
 ) -> None:
     """Write a setting to the config file."""
     if key not in _ALL_KEYS:
-        console.print(
-            f"[red]Unknown key: {key!r}. Valid keys: {', '.join(sorted(_ALL_KEYS))}[/red]"
+        exit_error(
+            f"Unknown key: {key!r}. Valid keys: {', '.join(sorted(_ALL_KEYS))}"
         )
-        raise typer.Exit(code=1)
     coerced = _coerce_config_value(key, value)
     validator = _CONFIG_VALIDATORS.get(key)
     if validator:
         fn, msg = validator
         if not fn(coerced):
-            console.print(f"[red]Invalid value for {key!r}: {msg}[/red]")
-            raise typer.Exit(code=1)
+            exit_error(f"Invalid value for {key!r}: {msg}")
     sec, subkey = key.split(".", 1)
     file_data = _read_config_file()
     if sec not in file_data:
@@ -1984,10 +1909,9 @@ def config_unset(
 ) -> None:
     """Remove a key from the config file (reverts to default)."""
     if key not in _ALL_KEYS:
-        console.print(
-            f"[red]Unknown key: {key!r}. Valid keys: {', '.join(sorted(_ALL_KEYS))}[/red]"
+        exit_error(
+            f"Unknown key: {key!r}. Valid keys: {', '.join(sorted(_ALL_KEYS))}"
         )
-        raise typer.Exit(code=1)
     sec, subkey = key.split(".", 1)
     file_data = _read_config_file()
     if sec not in file_data or subkey not in file_data[sec]:
@@ -2009,18 +1933,9 @@ def config_reset(
     if not CONFIG_PATH.exists():
         console.print("[yellow]No config file found.[/yellow]")
         return
-    if not force:
-        if not sys.stdin.isatty():
-            console.print("[red]Not a TTY: use -f/--force to reset without a prompt.[/red]")
-            raise typer.Exit(code=1)
-        try:
-            reply = input(f"Delete config file at {CONFIG_PATH}? [y/N]: ").strip().lower()
-        except EOFError:
-            console.print("\n[yellow]Cancelled.[/yellow]")
-            raise typer.Exit(code=0)
-        if reply not in ("y", "yes"):
-            console.print("[yellow]Cancelled.[/yellow]")
-            raise typer.Exit(code=0)
+    if not force and not confirm(f"Delete config file at {CONFIG_PATH}?"):
+        console.print("[yellow]Cancelled.[/yellow]")
+        raise typer.Exit(code=0)
     CONFIG_PATH.unlink()
     console.print(f"[green]Config reset (deleted {CONFIG_PATH}).[/green]")
 
