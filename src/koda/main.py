@@ -1,6 +1,5 @@
 import tomllib
 import typer
-import sqlite3
 import sys
 import hashlib
 import copy
@@ -14,7 +13,6 @@ import tempfile
 import re
 import signal
 import shutil
-from contextlib import contextmanager
 from datetime import datetime
 from importlib.metadata import version
 from pathlib import Path
@@ -22,17 +20,9 @@ from typing import Optional, List, Callable
 from rich.console import Console
 from rich.table import Table
 
-try:
-    import libsql_experimental as _libsql
-    _LIBSQL_AVAILABLE = True
-    try:
-        _IntegrityErrors = (sqlite3.IntegrityError, _libsql.IntegrityError)
-    except AttributeError:
-        _IntegrityErrors = (sqlite3.IntegrityError,)
-except ImportError:
-    _libsql = None
-    _LIBSQL_AVAILABLE = False
-    _IntegrityErrors = (sqlite3.IntegrityError,)
+from .db import MemoDatabase, DatabaseError, IntegrityErrors as _IntegrityErrors, VALID_SORT_COLUMNS
+from .models import MemoRow
+from .cli_utils import ExitCode, confirm, exit_error
 
 __app_name__ = "koda"
 __version__ = version("koda-cli")
@@ -99,8 +89,6 @@ DEFAULT_DB_PATH = DEFAULT_DB_DIR / "koda.db"
 DEFAULT_CONFIG_DIR = Path(os.getenv("XDG_CONFIG_HOME", Path.home() / ".config")) / "koda"
 DEFAULT_CONFIG_PATH = DEFAULT_CONFIG_DIR / "config.toml"
 CONFIG_PATH = Path(os.getenv("KODA_CONFIG_PATH", DEFAULT_CONFIG_PATH))
-
-VALID_SORT_COLUMNS = {"id", "idx", "uid", "tags", "content", "created_at", "modified_at", "shortcut"}
 
 VALID_LIST_COLUMNS = ["idx", "uid", "sc", "tags", "content", "created_at"]
 REQUIRED_LIST_COLUMNS = {"idx"}
@@ -188,8 +176,7 @@ _CONFIG_VALIDATORS: dict[str, tuple[Callable, str]] = {
 def _validate_list_columns(columns: List[str], source: str) -> None:
     validator, msg = _CONFIG_VALIDATORS["list.columns"]
     if not validator(columns):
-        console.print(f"[red]Invalid {source}: {msg}[/red]")
-        raise typer.Exit(code=1)
+        exit_error(f"Invalid {source}: {msg}")
 
 
 def load_config() -> tuple[dict, dict]:
@@ -260,8 +247,7 @@ def _read_config_file() -> dict:
         with open(CONFIG_PATH, "rb") as f:
             return tomllib.load(f)
     except Exception as e:
-        console.print(f"[red]Could not read config file: {e}[/red]")
-        raise typer.Exit(code=1)
+        exit_error(f"Could not read config file: {e}")
 
 
 def _write_config_file(data: dict) -> None:
@@ -301,59 +287,18 @@ def _coerce_config_value(key: str, raw: str):
             return parsed
         return typ(raw)
     except (ValueError, TypeError, json.JSONDecodeError):
-        console.print(
-            f"[red]Invalid value for {key!r}: {raw!r} (expected {typ.__name__})[/red]"
-        )
-        raise typer.Exit(code=1)
+        exit_error(f"Invalid value for {key!r}: {raw!r} (expected {typ.__name__})")
 
 
 _config, _config_sources = load_config()
 DB_PATH = Path(_config["db"]["path"]).expanduser()
 
-
-@contextmanager
-def _db_connection():
-    """Context manager that yields a DB connection for the configured backend."""
-    backend = _config["db"]["backend"]
-    if backend == "turso":
-        if not _LIBSQL_AVAILABLE:
-            console.print(
-                "[red]libsql-experimental is not installed. "
-                "Run: pip install libsql-experimental[/red]"
-            )
-            raise typer.Exit(code=1)
-        url = _config["turso"]["url"]
-        token = _config["turso"]["token"]
-        if not url:
-            console.print(
-                "[red]Turso URL is not configured. "
-                "Set turso.url in config or KODA_TURSO_URL env var.[/red]"
-            )
-            raise typer.Exit(code=1)
-        conn = _libsql.connect(url, auth_token=token or None)
-        try:
-            yield conn
-        except typer.Exit:
-            raise
-        except Exception:
-            raise
-        else:
-            conn.commit()
-        finally:
-            conn.close()
-    else:
-        conn = sqlite3.connect(DB_PATH)
-        try:
-            yield conn
-        except typer.Exit:
-            raise
-        except Exception:
-            conn.rollback()
-            raise
-        else:
-            conn.commit()
-        finally:
-            conn.close()
+db = MemoDatabase(
+    backend=_config["db"]["backend"],
+    path=DB_PATH,
+    turso_url=_config["turso"]["url"],
+    turso_token=_config["turso"]["token"],
+)
 
 
 def version_callback(value: bool):
@@ -373,118 +318,13 @@ def _generate_uid(content: str, created_at: str) -> str:
 
 def init_db():
     try:
-        if _config["db"]["backend"] == "local":
-            DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with _db_connection() as conn:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS memos (
-                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                    uid         TEXT UNIQUE,
-                    idx         INTEGER UNIQUE,
-                    shortcut    TEXT,
-                    content     TEXT,
-                    tags        TEXT,
-                    created_at  TIMESTAMP,
-                    modified_at TIMESTAMP
-                )
-            """)
-            cols = {row[1] for row in conn.execute("PRAGMA table_info(memos)").fetchall()}
-            if "shortcut" not in cols:
-                conn.execute("ALTER TABLE memos ADD COLUMN shortcut TEXT")
-            # Unique index allows NULL (multiple NULLs are OK), enforces uniqueness for non-NULL values
-            conn.execute(
-                "CREATE UNIQUE INDEX IF NOT EXISTS idx_memos_shortcut "
-                "ON memos(shortcut) WHERE shortcut IS NOT NULL"
-            )
+        db.init_db()
     except typer.Exit:
         raise
+    except DatabaseError as e:
+        exit_error(str(e))
     except Exception as e:
-        console.print(f"[red]Database Error:[/red] {e}")
-        raise typer.Exit(code=1)
-
-
-def _next_idx(conn) -> int:
-    row = conn.execute("SELECT MAX(idx) FROM memos").fetchone()
-    return (row[0] + 1) if row[0] is not None else 0
-
-
-def _build_memo_filters(query=None, tag=None, exclude_tag=None, shortcuts_only=False):
-    sql = " WHERE 1=1"
-    params = []
-    if query:
-        sql += " AND content LIKE ?"
-        params.append(f"%{query}%")
-    if tag:
-        sql += " AND tags LIKE ?"
-        params.append(f"%{tag}%")
-    if exclude_tag:
-        sql += " AND (tags IS NULL OR tags = '' OR tags NOT LIKE ?)"
-        params.append(f"%{exclude_tag}%")
-    if shortcuts_only:
-        sql += " AND shortcut IS NOT NULL AND shortcut != ''"
-    return sql, tuple(params)
-
-
-def get_memos(
-    query=None,
-    tag=None,
-    exclude_tag=None,
-    shortcuts_only=False,
-    limit=20,
-    offset=0,
-    sort_by="idx",
-    desc=False,
-):
-    order_column = sort_by if sort_by in VALID_SORT_COLUMNS else "idx"
-    order_direction = "DESC" if desc else "ASC"
-    where_sql, params = _build_memo_filters(query, tag, exclude_tag, shortcuts_only)
-
-    sql = (
-        "SELECT id, uid, idx, content, tags, shortcut, created_at FROM memos"
-        f"{where_sql} ORDER BY {order_column} {order_direction}, id ASC LIMIT ? OFFSET ?"
-    )
-    params = params + (limit, offset)
-    with _db_connection() as conn:
-        return conn.execute(sql, params).fetchall()
-
-
-def get_memo_stats(query=None, tag=None, exclude_tag=None, shortcuts_only=False):
-    where_sql, params = _build_memo_filters(query, tag, exclude_tag, shortcuts_only)
-    sql = f"SELECT COUNT(*), MAX(idx) FROM memos{where_sql}"
-    with _db_connection() as conn:
-        total_count, max_idx = conn.execute(sql, params).fetchone()
-    return total_count, max_idx
-
-
-def get_memos_all(
-    query=None,
-    tag=None,
-    exclude_tag=None,
-    shortcuts_only=False,
-    sort_by="idx",
-    desc=False,
-):
-    order_column = sort_by if sort_by in VALID_SORT_COLUMNS else "idx"
-    order_direction = "DESC" if desc else "ASC"
-    where_sql, params = _build_memo_filters(query, tag, exclude_tag, shortcuts_only)
-    sql = (
-        "SELECT id, uid, idx, content, tags, shortcut, created_at FROM memos"
-        f"{where_sql} ORDER BY {order_column} {order_direction}, id ASC"
-    )
-    with _db_connection() as conn:
-        return conn.execute(sql, params).fetchall()
-
-
-def delete_memo(memo_id: int) -> None:
-    with _db_connection() as conn:
-        conn.execute("DELETE FROM memos WHERE id = ?", (memo_id,))
-
-
-def get_latest_entry():
-    with _db_connection() as conn:
-        return conn.execute(
-            "SELECT id, uid, idx, content, tags, shortcut, created_at FROM memos ORDER BY created_at DESC, id DESC LIMIT 1"
-        ).fetchone()
+        exit_error(f"Database Error: {e}")
 
 
 def resolve_ref(ref: Optional[str]):
@@ -493,29 +333,18 @@ def resolve_ref(ref: Optional[str]):
     ref=None → latest; digit string → idx lookup; other string → shortcut lookup.
     """
     if ref is None:
-        row = get_latest_entry()
+        row = db.get_latest_entry()
         if row is None:
-            console.print("[yellow]No entries in database.[/yellow]")
-            raise typer.Exit(code=1)
+            exit_error("No entries in database.", style="yellow")
         return row
     if ref.isdigit():
-        with _db_connection() as conn:
-            row = conn.execute(
-                "SELECT id, uid, idx, content, tags, shortcut, created_at FROM memos WHERE idx = ?",
-                (int(ref),)
-            ).fetchone()
+        row = db.get_memo_by_idx(int(ref))
         if row is None:
-            console.print(f"[yellow]No entry at index {ref}.[/yellow]")
-            raise typer.Exit(code=1)
+            exit_error(f"No entry at index {ref}.", style="yellow")
         return row
-    with _db_connection() as conn:
-        row = conn.execute(
-            "SELECT id, uid, idx, content, tags, shortcut, created_at FROM memos WHERE shortcut = ?",
-            (ref,)
-        ).fetchone()
+    row = db.get_memo_by_shortcut(ref)
     if row is None:
-        console.print(f"[yellow]No entry with shortcut {ref!r}.[/yellow]")
-        raise typer.Exit(code=1)
+        exit_error(f"No entry with shortcut {ref!r}.", style="yellow")
     return row
 
 
@@ -528,8 +357,7 @@ def _parse_indices(specs: List[str]) -> List[int]:
         elif spec.isdigit():
             result.append(int(spec))
         else:
-            console.print(f"[red]Invalid index or range: {spec!r}[/red]")
-            raise typer.Exit(code=1)
+            exit_error(f"Invalid index or range: {spec!r}")
     return result
 
 
@@ -552,10 +380,7 @@ def _parse_tag_args(tag_args: Optional[List[str]]) -> List[str]:
 
 def _validate_shortcut(shortcut: Optional[str]) -> Optional[str]:
     if shortcut and len(shortcut) == 1 and shortcut in RESERVED_SHORTCUTS:
-        console.print(
-            f"[red]Shortcut {shortcut!r} is reserved as a 1-letter subcommand alias.[/red]"
-        )
-        raise typer.Exit(code=1)
+        exit_error(f"Shortcut {shortcut!r} is reserved as a 1-letter subcommand alias.")
     return shortcut
 
 
@@ -635,7 +460,7 @@ def _strip_raw_inline_comments(content: str) -> str:
 def emit_raw(ref: Optional[str], vars: Optional[List[str]] = None) -> None:
     init_db()
     row = resolve_ref(ref)
-    content = _apply_vars(row[3] if row[3] is not None else "", vars)
+    content = _apply_vars(row.content if row.content is not None else "", vars)
     content = _strip_raw_inline_comments(content)
     sys.stdout.write(content)
 
@@ -661,10 +486,9 @@ def _pick_candidates(
     effective_sort = (sort_by or cfg["sort_by"]).lower()
     if effective_sort not in VALID_SORT_COLUMNS:
         valid = ", ".join(sorted(VALID_SORT_COLUMNS))
-        console.print(f"[red]Invalid --sort-by '{sort_by}'. Use one of: {valid}.[/red]")
-        raise typer.Exit(code=1)
+        exit_error(f"Invalid --sort-by '{sort_by}'. Use one of: {valid}.")
     effective_desc = cfg["desc"] if desc is None else desc
-    return get_memos_all(
+    return db.get_memos_all(
         query=query,
         tag=tag,
         exclude_tag=exclude_tag,
@@ -675,18 +499,16 @@ def _pick_candidates(
 
 def _pick_with_fzf(candidates) -> Optional[str]:
     if shutil.which("fzf") is None:
-        console.print("[red]fzf is not installed. Install fzf to use `koda pick`.[/red]")
-        raise typer.Exit(code=1)
+        exit_error("fzf is not installed. Install fzf to use `koda pick`.")
 
     if not sys.stdin.isatty():
-        console.print("[red]`koda pick` requires an interactive TTY.[/red]")
-        raise typer.Exit(code=1)
+        exit_error("`koda pick` requires an interactive TTY.")
 
     lines = []
-    for _, uid, idx, content, tags, shortcut, created_at in candidates:
-        first_line = (content or "").splitlines()[0] if content else ""
+    for row in candidates:
+        first_line = (row.content or "").splitlines()[0] if row.content else ""
         display = (
-            f"{idx}\t{uid}\t{shortcut or '-'}\t{tags or '-'}\t{created_at}\t{first_line}"
+            f"{row.idx}\t{row.uid}\t{row.shortcut or '-'}\t{row.tags or '-'}\t{row.created_at}\t{first_line}"
         )
         lines.append(display)
 
@@ -735,21 +557,16 @@ def _resolve_pick_action(
         if enabled
     ]
     if len(selected) > 1:
-        console.print("[red]Use only one of --edit/-e, --exec/-x, --raw/-r, or --show/-s.[/red]")
-        raise typer.Exit(code=1)
+        exit_error("Use only one of --edit/-e, --exec/-x, --raw/-r, or --show/-s.")
     if print_id and selected:
-        console.print("[red]--print-id/-p cannot be combined with action flags.[/red]")
-        raise typer.Exit(code=1)
+        exit_error("--print-id/-p cannot be combined with action flags.")
     if selected:
         return selected[0]
     default_cmd = _config["defaults"]["cmd"]
     if default_cmd in ("raw", "show"):
         return default_cmd
-    console.print(
-        "[red]defaults.cmd must be 'raw' or 'show' for `koda pick` without action flags.[/red]"
-    )
     console.print("[dim]Hint: use --exec/-x, --edit/-e, --raw/-r, or --show/-s.[/dim]")
-    raise typer.Exit(code=1)
+    exit_error("defaults.cmd must be 'raw' or 'show' for `koda pick` without action flags.")
 
 
 def _run_pick_action(action: str, ref: str) -> None:
@@ -759,8 +576,7 @@ def _run_pick_action(action: str, ref: str) -> None:
     if action == "show":
         init_db()
         row = resolve_ref(ref)
-        _, uid, idx, content, tags, shortcut, created_at = row
-        _print_memo(uid, idx, shortcut, content, tags, created_at)
+        _print_memo(row.uid, row.idx, row.shortcut, row.content, row.tags, row.created_at)
         return
     if action == "edit":
         edit(ref)
@@ -768,8 +584,7 @@ def _run_pick_action(action: str, ref: str) -> None:
     if action == "exec":
         exec_memo(ref, None)
         return
-    console.print(f"[red]Unsupported pick action: {action}[/red]")
-    raise typer.Exit(code=1)
+    exit_error(f"Unsupported pick action: {action}")
 
 
 @app.callback(invoke_without_command=True)
@@ -792,8 +607,7 @@ def main(
         elif cmd == "show":
             init_db()
             row = resolve_ref(None)
-            _, uid, idx, content, tags, shortcut, created_at = row
-            _print_memo(uid, idx, shortcut, content, tags, created_at)
+            _print_memo(row.uid, row.idx, row.shortcut, row.content, row.tags, row.created_at)
         elif cmd == "add":
             _add_impl()
         else:
@@ -802,11 +616,7 @@ def main(
 
 def update_memo_full(memo_id: int, content: str, tags: str, shortcut: Optional[str], created_at: str):
     now = datetime.now().strftime(DATETIME_FMT)
-    with _db_connection() as conn:
-        conn.execute(
-            "UPDATE memos SET content = ?, tags = ?, shortcut = ?, created_at = ?, modified_at = ? WHERE id = ?",
-            (content.strip(), tags, shortcut or None, created_at, now, memo_id)
-        )
+    db.update_memo(memo_id, content, tags, shortcut, created_at, now)
 
 
 def _normalize_footer_segment(segment: str) -> str:
@@ -883,15 +693,14 @@ def _add_impl(
     now = datetime.now().strftime(DATETIME_FMT)
     uid = _generate_uid(content, now)
     try:
-        with _db_connection() as conn:
-            new_idx = _next_idx(conn)
+        with db.connection() as conn:
+            new_idx = MemoDatabase.next_idx(conn)
             conn.execute(
                 "INSERT INTO memos (uid, idx, shortcut, content, tags, created_at, modified_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (uid, new_idx, shortcut or None, content, formatted_tags, now, now)
             )
     except _IntegrityErrors:
-        console.print(f"[red]Shortcut {shortcut!r} is already in use.[/red]")
-        raise typer.Exit(code=1)
+        exit_error(f"Shortcut {shortcut!r} is already in use.")
 
     sc_str = f" sc=[bold green]{shortcut}[/bold green]" if shortcut else ""
     console.print(f"[green]Saved [{new_idx}] ({uid}) tags: {formatted_tags}{sc_str}[/green]")
@@ -933,8 +742,7 @@ def rm(
 ):
     """Delete entries. Defaults to latest; supports ranges, -t, -q, and --all for batch. Alias: `koda d`."""
     if all_entries and not force:
-        console.print("[red]--all requires -f/--force.[/red]")
-        raise typer.Exit(code=1)
+        exit_error("--all requires -f/--force.")
 
     init_db()
     is_batch = bool(tag or query or all_entries or (indices and (len(indices) > 1 or re.search(r'\d-\d', indices[0]))))
@@ -942,23 +750,15 @@ def rm(
     if is_batch:
         if indices:
             idx_list = _parse_indices(indices)
-            with _db_connection() as conn:
-                target_rows = []
-                for idx in idx_list:
-                    row = conn.execute(
-                        "SELECT id, uid, idx, content, tags, shortcut, created_at FROM memos WHERE idx = ?", (idx,)
-                    ).fetchone()
-                    if row is None:
-                        console.print(f"[yellow]No entry at index {idx}, skipping.[/yellow]")
-                    else:
-                        target_rows.append(row)
+            target_rows = []
+            for idx in idx_list:
+                row = db.get_memo_by_idx(idx)
+                if row is None:
+                    console.print(f"[yellow]No entry at index {idx}, skipping.[/yellow]")
+                else:
+                    target_rows.append(row)
         else:
-            where_sql, params = _build_memo_filters(query=query, tag=tag)
-            with _db_connection() as conn:
-                target_rows = conn.execute(
-                    f"SELECT id, uid, idx, content, tags, shortcut, created_at FROM memos{where_sql} ORDER BY idx ASC",
-                    params,
-                ).fetchall()
+            target_rows = db.get_memos_all(query=query, tag=tag, sort_by="idx")
 
         if not target_rows:
             console.print("[yellow]No matching entries.[/yellow]")
@@ -967,55 +767,33 @@ def rm(
         n = len(target_rows)
         console.print(f"\n[bold red]About to delete {n} entr{'y' if n == 1 else 'ies'}:[/bold red]")
         for row in target_rows[:10]:
-            _, uid, idx, content, _, _, _ = row
-            preview = (content or "").splitlines()[0][:60]
-            console.print(f"  [{idx}] ({uid}) {preview}")
+            preview = (row.content or "").splitlines()[0][:60]
+            console.print(f"  [{row.idx}] ({row.uid}) {preview}")
         if n > 10:
             console.print(f"  ... and {n - 10} more")
 
-        if not force:
-            if not sys.stdin.isatty():
-                console.print("[red]Not a TTY: use -f/--force to skip the prompt.[/red]")
-                raise typer.Exit(code=1)
-            try:
-                reply = input(f"\nDelete {n} entr{'y' if n == 1 else 'ies'}? [y/N]: ").strip().lower()
-            except EOFError:
-                console.print("\n[yellow]Cancelled.[/yellow]")
-                raise typer.Exit(code=0)
-            if reply not in ("y", "yes"):
-                console.print("[yellow]Cancelled.[/yellow]")
-                raise typer.Exit(code=0)
+        if not force and not confirm(f"\nDelete {n} entr{'y' if n == 1 else 'ies'}?"):
+            console.print("[yellow]Cancelled.[/yellow]")
+            raise typer.Exit(code=0)
 
-        ids = [row[0] for row in target_rows]
-        with _db_connection() as conn:
+        ids = [row.id for row in target_rows]
+        with db.connection() as conn:
             conn.executemany("DELETE FROM memos WHERE id = ?", [(id_,) for id_ in ids])
         console.print(f"[red]Deleted {n} entr{'y' if n == 1 else 'ies'}.[/red]")
 
     else:
         ref = indices[0] if indices else None
         row = resolve_ref(ref)
-        memo_id, uid, idx, content, tags, shortcut, created_at = row
-        _print_memo(uid, idx, shortcut, content, tags, created_at)
+        _print_memo(row.uid, row.idx, row.shortcut, row.content, row.tags, row.created_at)
         console.print("\n[bold red]This entry will be deleted.[/bold red]")
 
-        if not force:
-            if not sys.stdin.isatty():
-                console.print(
-                    "[red]Not a TTY: use [bold]-f/--force[/bold] to delete without a prompt.[/red]"
-                )
-                raise typer.Exit(code=1)
-            try:
-                reply = input("Delete this entry? [y/N]: ").strip().lower()
-            except EOFError:
-                console.print("\n[yellow]Cancelled.[/yellow]")
-                raise typer.Exit(code=0)
-            if reply not in ("y", "yes"):
-                console.print("[yellow]Cancelled.[/yellow]")
-                raise typer.Exit(code=0)
+        if not force and not confirm("Delete this entry?"):
+            console.print("[yellow]Cancelled.[/yellow]")
+            raise typer.Exit(code=0)
 
-        delete_memo(memo_id)
-        preview = content.splitlines()[0][:50] if content else ""
-        console.print(f"[red]Deleted [{idx}]: {preview}...[/red]")
+        db.delete_memo(row.id)
+        preview = row.content.splitlines()[0][:50] if row.content else ""
+        console.print(f"[red]Deleted [{row.idx}]: {preview}...[/red]")
 
 
 @app.command(name="copy")
@@ -1027,16 +805,15 @@ def copy(
     """Duplicate an entry to a new row (same body and tags, no shortcut). Alias: `koda c`."""
     init_db()
     row = resolve_ref(ref)
-    memo_id, uid, idx, content, tags, shortcut, created_at = row
     now = datetime.now().strftime(DATETIME_FMT)
-    new_uid = _generate_uid(content, now)
-    with _db_connection() as conn:
-        new_idx = _next_idx(conn)
+    new_uid = _generate_uid(row.content or "", now)
+    with db.connection() as conn:
+        new_idx = MemoDatabase.next_idx(conn)
         conn.execute(
             "INSERT INTO memos (uid, idx, shortcut, content, tags, created_at, modified_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (new_uid, new_idx, None, content, tags, now, now)
+            (new_uid, new_idx, None, row.content, row.tags, now, now)
         )
-    console.print(f"[green]Copied [{idx}] → [{new_idx}] ({new_uid}).[/green]")
+    console.print(f"[green]Copied [{row.idx}] → [{new_idx}] ({new_uid}).[/green]")
 
 
 @app.command()
@@ -1048,7 +825,10 @@ def edit(
     """Open an entry in $EDITOR (body plus tags/shortcut/metadata footer). Alias: `koda e`."""
     init_db()
     row = resolve_ref(ref)
-    memo_id, uid, idx, content, tags, shortcut, created_at = row
+    memo_id = row.id
+    content, tags, shortcut, created_at, idx = (
+        row.content, row.tags, row.shortcut, row.created_at, row.idx,
+    )
 
     sc_line = f"shortcut: {shortcut}" if shortcut else "shortcut: "
     template = f"{content}\n\n---\n# Metadata\ntags: {tags}\n{sc_line}\ncreated_at: {created_at}\n---"
@@ -1087,8 +867,7 @@ def edit(
             try:
                 update_memo_full(memo_id, new_content, new_tags, new_shortcut, new_created_at)
             except _IntegrityErrors:
-                console.print(f"[red]Shortcut {new_shortcut!r} is already in use.[/red]")
-                raise typer.Exit(code=1)
+                exit_error(f"Shortcut {new_shortcut!r} is already in use.")
             console.print(f"[green]Entry [{idx}] updated.[/green]")
         else:
             new_content = "\n---\n".join(parts).strip() if parts else new_data.strip()
@@ -1122,8 +901,7 @@ def _list_memos_impl(
     if per_page is None:
         per_page = cfg["per_page"]
     elif per_page < 1:
-        console.print("[red]--per-page must be >= 1.[/red]")
-        raise typer.Exit(code=1)
+        exit_error("--per-page must be >= 1.")
     if sort_by is None:
         sort_by = cfg["sort_by"]
     if desc is None:
@@ -1133,14 +911,12 @@ def _list_memos_impl(
     if truncate is None:
         truncate = cfg["truncate"]
     elif truncate < 0:
-        console.print("[red]--truncate must be 0 or greater.[/red]")
-        raise typer.Exit(code=1)
+        exit_error("--truncate must be 0 or greater.")
 
     normalized_sort = sort_by.lower()
     if normalized_sort not in VALID_SORT_COLUMNS:
         valid = ", ".join(sorted(VALID_SORT_COLUMNS))
-        console.print(f"[red]Invalid --sort-by '{sort_by}'. Use one of: {valid}.[/red]")
-        raise typer.Exit(code=1)
+        exit_error(f"Invalid --sort-by '{sort_by}'. Use one of: {valid}.")
 
     rows_value: Optional[int]
     try:
@@ -1148,11 +924,10 @@ def _list_memos_impl(
         if parsed_rows < 0:
             raise ValueError
     except ValueError:
-        console.print("[red]--rows must be an integer of 0 or greater.[/red]")
-        raise typer.Exit(code=1)
+        exit_error("--rows must be an integer of 0 or greater.")
     rows_value = None if parsed_rows == 0 else parsed_rows
 
-    total_count, max_idx = get_memo_stats(query, tag, exclude_tag, shortcuts_only)
+    total_count, max_idx = db.get_memo_stats(query, tag, exclude_tag, shortcuts_only)
     total_pages = (total_count + per_page - 1) // per_page if total_count else 0
 
     if total_pages > 0 and page > total_pages:
@@ -1165,7 +940,7 @@ def _list_memos_impl(
         raise typer.Exit(code=1)
 
     offset = (page - 1) * per_page
-    memos = get_memos(
+    memos = db.get_memos(
         query,
         tag,
         exclude_tag,
@@ -1186,8 +961,8 @@ def _list_memos_impl(
         table.add_column(label, **kwargs)
 
     row_values: dict = {}
-    for _, uid, idx, content, tags, sc, dt in memos:
-        content_lines = (content or "").splitlines()
+    for memo in memos:
+        content_lines = (memo.content or "").splitlines()
         if rows_value is None:
             preview_lines = content_lines if content_lines else [""]
         else:
@@ -1207,12 +982,12 @@ def _list_memos_impl(
 
         preview = "\n".join(preview_lines)
         row_values = {
-            "idx": str(idx),
-            "uid": uid or "",
-            "sc": sc or "",
-            "tags": tags or "",
+            "idx": str(memo.idx),
+            "uid": memo.uid or "",
+            "sc": memo.shortcut or "",
+            "tags": memo.tags or "",
             "content": preview,
-            "created_at": dt,
+            "created_at": memo.created_at,
         }
         table.add_row(*[row_values[col] for col in columns])
     console.print(table)
@@ -1315,8 +1090,7 @@ def pick(
 ):
     """Pick an entry with fzf, then run an action (or print IDX). Alias: `koda p`."""
     if print_id and (edit_mode or exec_mode or raw_mode or show_mode):
-        console.print("[red]--print-id/-p cannot be combined with action flags.[/red]")
-        raise typer.Exit(code=1)
+        exit_error("--print-id/-p cannot be combined with action flags.")
 
     action: Optional[str] = None if print_id else _resolve_pick_action(
         edit_mode, exec_mode, raw_mode, show_mode, print_id
@@ -1325,8 +1099,7 @@ def pick(
     init_db()
     candidates = _pick_candidates(query, tag, exclude_tag, shortcuts_only, sort_by, desc)
     if not candidates:
-        console.print("[yellow]No entries found.[/yellow]")
-        raise typer.Exit(code=1)
+        exit_error("No entries found.", style="yellow")
 
     selected_ref = _pick_with_fzf(candidates)
     if selected_ref is None:
@@ -1353,15 +1126,13 @@ def show(
     if ref is None:
         stdin_refs = _read_stdin_refs()
         if len(stdin_refs) > 1:
-            console.print("[red]show accepts one ref from stdin. Got multiple values.[/red]")
-            raise typer.Exit(code=1)
+            exit_error("show accepts one ref from stdin. Got multiple values.")
         if stdin_refs:
             ref = stdin_refs[0]
 
     init_db()
     row = resolve_ref(ref)
-    memo_id, uid, idx, content, tags, shortcut, created_at = row
-    _print_memo(uid, idx, shortcut, content, tags, created_at)
+    _print_memo(row.uid, row.idx, row.shortcut, row.content, row.tags, row.created_at)
 
 
 @app.command()
@@ -1421,15 +1192,13 @@ def exec_memo(
     if ref is None:
         stdin_refs = _read_stdin_refs()
         if len(stdin_refs) > 1:
-            console.print("[red]ex accepts one ref from stdin. Got multiple values.[/red]")
-            raise typer.Exit(code=1)
+            exit_error("ex accepts one ref from stdin. Got multiple values.")
         if stdin_refs:
             ref = stdin_refs[0]
 
     init_db()
     row = resolve_ref(ref)
-    memo_id, uid, idx, content, tags, shortcut, created_at = row
-    content = _apply_vars(content.strip() if content else "", vars)
+    content = _apply_vars(row.content.strip() if row.content else "", vars)
     shell = _config["exec"]["shell"]
     os.execvp(shell, [shell, "-c", content])
 
@@ -1442,8 +1211,7 @@ def tag(
 ):
     """Add or remove tags on one or more entries. Supports ranges (e.g. 2-5). Alias: `koda t`."""
     if not tags and not untag:
-        console.print("[red]Specify at least one of -t/--tag (add) or -T/--untag (remove).[/red]")
-        raise typer.Exit(code=1)
+        exit_error("Specify at least one of -t/--tag (add) or -T/--untag (remove).")
 
     init_db()
     idx_list = _parse_indices(indices)
@@ -1451,7 +1219,7 @@ def tag(
     remove_list = _parse_tag_args(untag)
 
     updated = 0
-    with _db_connection() as conn:
+    with db.connection() as conn:
         for idx in idx_list:
             row = conn.execute("SELECT id, tags FROM memos WHERE idx = ?", (idx,)).fetchone()
             if row is None:
@@ -1476,22 +1244,19 @@ def tag(
 
 def _require_git_cli() -> None:
     if shutil.which("git") is None:
-        console.print("[red]git not found. Install Git and ensure it is on PATH.[/red]")
-        raise typer.Exit(code=1)
+        exit_error("git not found. Install Git and ensure it is on PATH.")
 
 
 def _resolve_git_sync_root() -> Path:
     raw = (_config["git"]["sync_path"] or "").strip()
     if not raw:
-        console.print(
-            "[red]git.sync_path is empty. Set [git] sync_path in config or KODA_GIT_SYNC_PATH "
-            "(path to your local clone of the sync repository).[/red]"
+        exit_error(
+            "git.sync_path is empty. Set [git] sync_path in config or KODA_GIT_SYNC_PATH "
+            "(path to your local clone of the sync repository)."
         )
-        raise typer.Exit(code=1)
     root = Path(raw).expanduser().resolve()
     if not root.is_dir():
-        console.print(f"[red]git.sync_path is not a directory: {root}[/red]")
-        raise typer.Exit(code=1)
+        exit_error(f"git.sync_path is not a directory: {root}")
     return root
 
 
@@ -1504,8 +1269,7 @@ def _resolve_git_payload_path(sync_root: Path) -> Path:
     try:
         payload.relative_to(sync_root)
     except ValueError:
-        console.print("[red]git.payload_file must stay inside git.sync_path.[/red]")
-        raise typer.Exit(code=1)
+        exit_error("git.payload_file must stay inside git.sync_path.")
     return payload
 
 
@@ -1516,8 +1280,7 @@ def _ensure_git_worktree(sync_root: Path) -> None:
         text=True,
     )
     if r.returncode != 0 or (r.stdout or "").strip() != "true":
-        console.print(f"[red]Not a Git working tree: {sync_root}[/red]")
-        raise typer.Exit(code=1)
+        exit_error(f"Not a Git working tree: {sync_root}")
 
 
 def _git_has_remote(sync_root: Path) -> bool:
@@ -1573,14 +1336,12 @@ def _git_pull_rebase_if_remote(sync_root: Path) -> None:
         return
     remote = _git_preferred_remote(sync_root)
     if not remote:
-        console.print("[red]No Git remote resolved for pull in the sync clone.[/red]")
-        raise typer.Exit(code=1)
+        exit_error("No Git remote resolved for pull in the sync clone.")
     branch = _git_branch_show_current(sync_root)
     if not branch:
-        console.print(
-            "[red]Cannot git pull in detached HEAD in the sync clone. Check out a branch, then retry.[/red]"
+        exit_error(
+            "Cannot git pull in detached HEAD in the sync clone. Check out a branch, then retry."
         )
-        raise typer.Exit(code=1)
     if _git_has_upstream(sync_root):
         cmd: List[str] = ["git", "-C", str(sync_root), "pull", "--rebase"]
     else:
@@ -1607,14 +1368,12 @@ def _git_push_if_remote(sync_root: Path) -> None:
         return
     remote = _git_preferred_remote(sync_root)
     if not remote:
-        console.print("[red]No Git remote resolved for push in the sync clone.[/red]")
-        raise typer.Exit(code=1)
+        exit_error("No Git remote resolved for push in the sync clone.")
     branch = _git_branch_show_current(sync_root)
     if not branch:
-        console.print(
-            "[red]Cannot git push in detached HEAD in the sync clone. Check out a branch, then retry.[/red]"
+        exit_error(
+            "Cannot git push in detached HEAD in the sync clone. Check out a branch, then retry."
         )
-        raise typer.Exit(code=1)
     if _git_has_upstream(sync_root):
         cmd: List[str] = ["git", "-C", str(sync_root), "push"]
     else:
@@ -1627,7 +1386,9 @@ def _git_push_if_remote(sync_root: Path) -> None:
             text=True,
         )
     except subprocess.CalledProcessError as e:
-        console.print("[red]git push failed. Configure upstream/remotes or run push from that clone manually.[/red]")
+        console.print(
+            "[red]git push failed. Configure upstream/remotes or run push from that clone manually.[/red]"
+        )
         if e.stderr:
             console.print(f"[dim]{e.stderr.strip()}[/dim]")
         raise typer.Exit(code=1)
@@ -1636,11 +1397,10 @@ def _git_push_if_remote(sync_root: Path) -> None:
 def _require_git_sync_wire_format() -> None:
     fmt = (_config["git"].get("sync_format") or "").strip().lower()
     if fmt != GIT_SYNC_FORMAT_JSONL:
-        console.print(
-            f"[red]git.sync_format must be {GIT_SYNC_FORMAT_JSONL!r} (JSON Lines). "
-            f"Set git.sync_format or KODA_GIT_SYNC_FORMAT.[/red]"
+        exit_error(
+            f"git.sync_format must be {GIT_SYNC_FORMAT_JSONL!r} (JSON Lines). "
+            f"Set git.sync_format or KODA_GIT_SYNC_FORMAT."
         )
-        raise typer.Exit(code=1)
 
 
 def _parse_memo_datetime(s: Optional[str]) -> datetime:
@@ -1704,7 +1464,7 @@ def _parse_git_sync_record(raw: object, lineno: int) -> dict:
 def _dump_git_sync_payload() -> bytes:
     """Export memos as UTF-8 JSON Lines, one object per line, sorted by uid (stable share format)."""
     _require_git_sync_wire_format()
-    with _db_connection() as conn:
+    with db.connection() as conn:
         rows = conn.execute(
             "SELECT uid, idx, shortcut, content, tags, created_at, modified_at "
             "FROM memos ORDER BY uid ASC, id ASC"
@@ -1764,8 +1524,11 @@ def _atomic_write_bytes(path: Path, data: bytes) -> None:
 def _shortcut_usable(conn, uid: str, shortcut: Optional[str]) -> Optional[str]:
     if shortcut is None or shortcut == "":
         return shortcut
-    row = conn.execute("SELECT uid FROM memos WHERE shortcut = ?", (shortcut,)).fetchone()
-    if row is None or row[0] == uid:
+    existing = conn.execute("SELECT uid FROM memos WHERE shortcut = ?", (shortcut,)).fetchone()
+    if existing is None:
+        return shortcut
+    (existing_uid,) = existing
+    if existing_uid == uid:
         return shortcut
     return None
 
@@ -1773,7 +1536,7 @@ def _shortcut_usable(conn, uid: str, shortcut: Optional[str]) -> Optional[str]:
 def _pick_idx(conn, preferred: int) -> int:
     if conn.execute("SELECT 1 FROM memos WHERE idx = ?", (preferred,)).fetchone() is None:
         return preferred
-    return _next_idx(conn)
+    return MemoDatabase.next_idx(conn)
 
 
 def _apply_idx_for_row(conn, memo_id: int, preferred: int) -> None:
@@ -1784,13 +1547,13 @@ def _apply_idx_for_row(conn, memo_id: int, preferred: int) -> None:
     if occ is None:
         conn.execute("UPDATE memos SET idx = ? WHERE id = ?", (preferred, memo_id))
     else:
-        conn.execute("UPDATE memos SET idx = ? WHERE id = ?", (_next_idx(conn), memo_id))
+        conn.execute("UPDATE memos SET idx = ? WHERE id = ?", (MemoDatabase.next_idx(conn), memo_id))
 
 
 def _merge_remote_sync_entries(entries: List[dict]) -> tuple[int, int, int, int]:
     """Returns (inserted, updated, skipped, shortcut_dropped)."""
     inserted = updated = skipped = shortcut_dropped = 0
-    with _db_connection() as conn:
+    with db.connection() as conn:
         for rm in sorted(
             entries,
             key=lambda m: (
@@ -1815,10 +1578,11 @@ def _merge_remote_sync_entries(entries: List[dict]) -> tuple[int, int, int, int]
             sc = raw_sc if raw_sc is None or raw_sc == "" else str(raw_sc)
 
             r_ts = _parse_memo_datetime(modified_at) or _parse_memo_datetime(created_at)
-            local = conn.execute(
-                "SELECT id, idx, shortcut, content, tags, created_at, modified_at FROM memos WHERE uid = ?",
+            local_row = conn.execute(
+                "SELECT id, uid, idx, content, tags, shortcut, created_at, modified_at FROM memos WHERE uid = ?",
                 (uid,),
             ).fetchone()
+            local = MemoRow.from_row(local_row)
             if local is None:
                 pick_idx = _pick_idx(conn, want_idx)
                 use_sc = _shortcut_usable(conn, uid, sc)
@@ -1832,7 +1596,7 @@ def _merge_remote_sync_entries(entries: List[dict]) -> tuple[int, int, int, int]
                     )
                     inserted += 1
                 except _IntegrityErrors:
-                    pick_idx = _next_idx(conn)
+                    pick_idx = MemoDatabase.next_idx(conn)
                     try:
                         conn.execute(
                             "INSERT INTO memos (uid, idx, shortcut, content, tags, created_at, modified_at) "
@@ -1851,9 +1615,8 @@ def _merge_remote_sync_entries(entries: List[dict]) -> tuple[int, int, int, int]
                             shortcut_dropped += 1
                 continue
 
-            memo_id = local[0]
-            l_created, l_modified = local[5], local[6]
-            l_ts = _parse_memo_datetime(l_modified) or _parse_memo_datetime(l_created)
+            memo_id = local.id
+            l_ts = _parse_memo_datetime(local.modified_at) or _parse_memo_datetime(local.created_at)
             if r_ts <= l_ts:
                 skipped += 1
                 continue
@@ -1879,10 +1642,9 @@ def move(
     init_db()
     if from_idx == to_idx:
         return
-    with _db_connection() as conn:
+    with db.connection() as conn:
         if conn.execute("SELECT 1 FROM memos WHERE idx = ?", (from_idx,)).fetchone() is None:
-            console.print(f"[red]No entry at index {from_idx}.[/red]")
-            raise typer.Exit(code=1)
+            exit_error(f"No entry at index {from_idx}.")
         if conn.execute("SELECT 1 FROM memos WHERE idx = ?", (to_idx,)).fetchone() is not None:
             console.print(f"[red]Index {to_idx} is already occupied.[/red]")
             console.print(
@@ -1911,14 +1673,12 @@ def push(
 
     if payload_file is not None:
         if not payload_file.is_file():
-            console.print(f"[red]--file does not exist: {payload_file}[/red]")
-            raise typer.Exit(code=1)
+            exit_error(f"--file does not exist: {payload_file}")
         data = payload_file.read_bytes()
         try:
             _ = _load_git_sync_payload(data)
         except Exception as e:
-            console.print(f"[red]Invalid sync payload: {e}[/red]")
-            raise typer.Exit(code=1)
+            exit_error(f"Invalid sync payload: {e}")
     else:
         data = _dump_git_sync_payload()
 
@@ -1963,8 +1723,7 @@ def pull(
     _require_git_sync_wire_format()
     if local_payload_path is not None:
         if not local_payload_path.is_file():
-            console.print(f"[red]--file does not exist: {local_payload_path}[/red]")
-            raise typer.Exit(code=1)
+            exit_error(f"--file does not exist: {local_payload_path}")
         data = local_payload_path.read_bytes()
     else:
         _require_git_cli()
@@ -1973,15 +1732,13 @@ def pull(
         payload_path = _resolve_git_payload_path(sync_root)
         _git_pull_rebase_if_remote(sync_root)
         if not payload_path.is_file():
-            console.print(f"[red]Payload file missing after pull: {payload_path}[/red]")
-            raise typer.Exit(code=1)
+            exit_error(f"Payload file missing after pull: {payload_path}")
         data = payload_path.read_bytes()
 
     try:
         rows = _load_git_sync_payload(data)
     except Exception as e:
-        console.print(f"[red]Invalid sync payload: {e}[/red]")
-        raise typer.Exit(code=1)
+        exit_error(f"Invalid sync payload: {e}")
 
     ins, upd, skp, dsc = _merge_remote_sync_entries(rows)
     tail = f", [yellow]{dsc}[/yellow] shortcut(s) dropped (conflicts with local shortcuts)" if dsc else ""
@@ -2001,24 +1758,22 @@ def shift_cmd(
     init_db()
     if count == 0:
         return
-    with _db_connection() as conn:
+    with db.connection() as conn:
         if count < 0:
             if start + count < 0:
-                console.print(
-                    f"[red]Cannot shift down by {abs(count)}: "
-                    f"index {start} would become {start + count} (negative indices not allowed).[/red]"
+                exit_error(
+                    f"Cannot shift down by {abs(count)}: "
+                    f"index {start} would become {start + count} (negative indices not allowed)."
                 )
-                raise typer.Exit(code=1)
             collision = conn.execute(
                 "SELECT 1 FROM memos WHERE idx >= ? AND idx < ?",
                 (start + count, start),
             ).fetchone()
             if collision:
-                console.print(
-                    f"[red]Cannot shift down by {abs(count)}: "
-                    f"entries exist in [{start + count}, {start - 1}].[/red]"
+                exit_error(
+                    f"Cannot shift down by {abs(count)}: "
+                    f"entries exist in [{start + count}, {start - 1}]."
                 )
-                raise typer.Exit(code=1)
         # Two-step update to avoid UNIQUE constraint violations during bulk shift
         OFFSET = 2_000_000
         conn.execute("UPDATE memos SET idx = idx + ? WHERE idx >= ?", (OFFSET, start))
@@ -2038,15 +1793,13 @@ def swap(
     init_db()
     if idx1 == idx2:
         return
-    with _db_connection() as conn:
+    with db.connection() as conn:
         a = conn.execute("SELECT id FROM memos WHERE idx = ?", (idx1,)).fetchone()
         b = conn.execute("SELECT id FROM memos WHERE idx = ?", (idx2,)).fetchone()
         if a is None:
-            console.print(f"[red]No entry at index {idx1}.[/red]")
-            raise typer.Exit(code=1)
+            exit_error(f"No entry at index {idx1}.")
         if b is None:
-            console.print(f"[red]No entry at index {idx2}.[/red]")
-            raise typer.Exit(code=1)
+            exit_error(f"No entry at index {idx2}.")
         # Use -1 as temp to avoid UNIQUE constraint conflict
         conn.execute("UPDATE memos SET idx = -1 WHERE id = ?", (a[0],))
         conn.execute("UPDATE memos SET idx = ? WHERE id = ?", (idx1, b[0]))
@@ -2058,7 +1811,7 @@ def swap(
 def compact_indices():
     """Fill index gaps by reassigning idx to contiguous values from 0. Alias: `koda k`."""
     init_db()
-    with _db_connection() as conn:
+    with db.connection() as conn:
         rows = conn.execute("SELECT id, idx FROM memos ORDER BY idx ASC, id ASC").fetchall()
         if not rows:
             console.print("[yellow]No entries in database.[/yellow]")
@@ -2123,10 +1876,9 @@ def config_get(
 ) -> None:
     """Print a single config value (plain text, for scripting)."""
     if key not in _ALL_KEYS:
-        console.print(
-            f"[red]Unknown key: {key!r}. Valid keys: {', '.join(sorted(_ALL_KEYS))}[/red]"
+        exit_error(
+            f"Unknown key: {key!r}. Valid keys: {', '.join(sorted(_ALL_KEYS))}"
         )
-        raise typer.Exit(code=1)
     sec, subkey = key.split(".", 1)
     sys.stdout.write(str(_config[sec][subkey]) + "\n")
 
@@ -2138,17 +1890,15 @@ def config_set_cmd(
 ) -> None:
     """Write a setting to the config file."""
     if key not in _ALL_KEYS:
-        console.print(
-            f"[red]Unknown key: {key!r}. Valid keys: {', '.join(sorted(_ALL_KEYS))}[/red]"
+        exit_error(
+            f"Unknown key: {key!r}. Valid keys: {', '.join(sorted(_ALL_KEYS))}"
         )
-        raise typer.Exit(code=1)
     coerced = _coerce_config_value(key, value)
     validator = _CONFIG_VALIDATORS.get(key)
     if validator:
         fn, msg = validator
         if not fn(coerced):
-            console.print(f"[red]Invalid value for {key!r}: {msg}[/red]")
-            raise typer.Exit(code=1)
+            exit_error(f"Invalid value for {key!r}: {msg}")
     sec, subkey = key.split(".", 1)
     file_data = _read_config_file()
     if sec not in file_data:
@@ -2164,10 +1914,9 @@ def config_unset(
 ) -> None:
     """Remove a key from the config file (reverts to default)."""
     if key not in _ALL_KEYS:
-        console.print(
-            f"[red]Unknown key: {key!r}. Valid keys: {', '.join(sorted(_ALL_KEYS))}[/red]"
+        exit_error(
+            f"Unknown key: {key!r}. Valid keys: {', '.join(sorted(_ALL_KEYS))}"
         )
-        raise typer.Exit(code=1)
     sec, subkey = key.split(".", 1)
     file_data = _read_config_file()
     if sec not in file_data or subkey not in file_data[sec]:
@@ -2189,18 +1938,9 @@ def config_reset(
     if not CONFIG_PATH.exists():
         console.print("[yellow]No config file found.[/yellow]")
         return
-    if not force:
-        if not sys.stdin.isatty():
-            console.print("[red]Not a TTY: use -f/--force to reset without a prompt.[/red]")
-            raise typer.Exit(code=1)
-        try:
-            reply = input(f"Delete config file at {CONFIG_PATH}? [y/N]: ").strip().lower()
-        except EOFError:
-            console.print("\n[yellow]Cancelled.[/yellow]")
-            raise typer.Exit(code=0)
-        if reply not in ("y", "yes"):
-            console.print("[yellow]Cancelled.[/yellow]")
-            raise typer.Exit(code=0)
+    if not force and not confirm(f"Delete config file at {CONFIG_PATH}?"):
+        console.print("[yellow]Cancelled.[/yellow]")
+        raise typer.Exit(code=0)
     CONFIG_PATH.unlink()
     console.print(f"[green]Config reset (deleted {CONFIG_PATH}).[/green]")
 
