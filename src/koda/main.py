@@ -173,6 +173,12 @@ _CONFIG_VALIDATORS: dict[str, tuple[Callable, str]] = {
 }
 
 
+def _validate_list_columns(columns: List[str], source: str) -> None:
+    validator, msg = _CONFIG_VALIDATORS["list.columns"]
+    if not validator(columns):
+        exit_error(f"Invalid {source}: {msg}")
+
+
 def load_config() -> tuple[dict, dict]:
     """Return (merged_config, source_map). source_map[dotkey] = 'default'|'file'|'env'."""
     config = copy.deepcopy(CONFIG_DEFAULTS)
@@ -891,6 +897,7 @@ def _list_memos_impl(
     cfg = _config["list"]
     if columns is None:
         columns = cfg["columns"]
+        _validate_list_columns(columns, "list.columns")
     if per_page is None:
         per_page = cfg["per_page"]
     elif per_page < 1:
@@ -1040,9 +1047,7 @@ def list_memos(
     parsed_columns: Optional[List[str]] = None
     if columns is not None:
         parsed_columns = [c.strip() for c in columns.split(",") if c.strip()]
-        validator, msg = _CONFIG_VALIDATORS["list.columns"]
-        if not validator(parsed_columns):
-            exit_error(f"Invalid --columns: {msg}")
+        _validate_list_columns(parsed_columns, "--columns")
     _list_memos_impl(query, tag, exclude_tag, shortcuts_only, per_page, page, sort_by, desc, rows, truncate, parsed_columns)
 
 
