@@ -1,0 +1,100 @@
+"""Tests for MemoMerger.merge: insert / update / skip / conflict paths."""
+
+from koda.git_sync import MemoMerger
+
+
+def entry(uid, idx, content="body", tags="", shortcut=None,
+          created_at="2026-01-01 00:00:00", modified_at=None):
+    return {
+        "uid": uid,
+        "idx": idx,
+        "shortcut": shortcut,
+        "content": content,
+        "tags": tags,
+        "created_at": created_at,
+        "modified_at": modified_at if modified_at is not None else created_at,
+    }
+
+
+def test_insert_new_entry(db):
+    inserted, updated, skipped, dropped = MemoMerger(db).merge([entry("uid0001", 0)])
+    assert (inserted, updated, skipped, dropped) == (1, 0, 0, 0)
+    row = db.get_memo_by_uid("uid0001")
+    assert row is not None
+    assert row.content == "body"
+
+
+def test_update_when_remote_is_newer(db):
+    db.add_memo("uid0001", 0, None, "old", "", "2026-01-01 00:00:00", "2026-01-01 00:00:00")
+    inserted, updated, skipped, dropped = MemoMerger(db).merge(
+        [entry("uid0001", 0, content="new", modified_at="2026-02-01 00:00:00")]
+    )
+    assert (inserted, updated, skipped, dropped) == (0, 1, 0, 0)
+    assert db.get_memo_by_uid("uid0001").content == "new"
+
+
+def test_skip_when_remote_is_older(db):
+    db.add_memo("uid0001", 0, None, "current", "", "2026-03-01 00:00:00", "2026-03-01 00:00:00")
+    inserted, updated, skipped, dropped = MemoMerger(db).merge(
+        [entry("uid0001", 0, content="stale", modified_at="2026-02-01 00:00:00")]
+    )
+    assert (inserted, updated, skipped, dropped) == (0, 0, 1, 0)
+    assert db.get_memo_by_uid("uid0001").content == "current"
+
+
+def test_skip_when_timestamps_equal(db):
+    db.add_memo("uid0001", 0, None, "current", "", "2026-01-01 00:00:00", "2026-01-01 00:00:00")
+    _, updated, skipped, _ = MemoMerger(db).merge(
+        [entry("uid0001", 0, content="same-ts", modified_at="2026-01-01 00:00:00")]
+    )
+    assert (updated, skipped) == (0, 1)
+
+
+def test_skip_entry_with_missing_uid(db):
+    inserted, updated, skipped, dropped = MemoMerger(db).merge([{"idx": 0, "content": "x"}])
+    assert (inserted, updated, skipped, dropped) == (0, 0, 1, 0)
+
+
+def test_skip_entry_with_invalid_idx(db):
+    inserted, _, skipped, _ = MemoMerger(db).merge(
+        [{"uid": "uid0001", "idx": "not-int", "content": "x"}]
+    )
+    assert (inserted, skipped) == (0, 1)
+
+
+def test_idx_conflict_resolved_to_next_idx(db):
+    db.add_memo("uid0001", 0, None, "first", "", "2026-01-01 00:00:00", "2026-01-01 00:00:00")
+    inserted, _, _, _ = MemoMerger(db).merge([entry("uid0002", 0, content="second")])
+    assert inserted == 1
+    new_row = db.get_memo_by_uid("uid0002")
+    assert new_row.idx != 0
+
+
+def test_shortcut_conflict_dropped_on_insert(db):
+    db.add_memo("uid0001", 0, "ab", "owner", "", "2026-01-01 00:00:00", "2026-01-01 00:00:00")
+    inserted, _, _, dropped = MemoMerger(db).merge(
+        [entry("uid0002", 1, content="wants-ab", shortcut="ab")]
+    )
+    assert (inserted, dropped) == (1, 1)
+    assert db.get_memo_by_uid("uid0002").shortcut is None
+
+
+def test_shortcut_kept_when_owned_by_same_uid(db):
+    db.add_memo("uid0001", 0, "ab", "old", "", "2026-01-01 00:00:00", "2026-01-01 00:00:00")
+    _, updated, _, dropped = MemoMerger(db).merge(
+        [entry("uid0001", 0, content="new", shortcut="ab", modified_at="2026-02-01 00:00:00")]
+    )
+    assert (updated, dropped) == (1, 0)
+    assert db.get_memo_by_uid("uid0001").shortcut == "ab"
+
+
+def test_batch_mixed_outcomes(db):
+    db.add_memo("uid0001", 0, None, "existing", "", "2026-01-01 00:00:00", "2026-01-01 00:00:00")
+    inserted, updated, skipped, _ = MemoMerger(db).merge([
+        entry("uid0002", 1, content="brand-new"),
+        entry("uid0001", 0, content="updated", modified_at="2026-05-01 00:00:00"),
+        entry("uid0003", 2, content="another-new"),
+    ])
+    assert inserted == 2
+    assert updated == 1
+    assert skipped == 0
