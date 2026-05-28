@@ -1,5 +1,6 @@
 """Database layer for koda: connection, schema, CRUD over the memos table."""
 
+import os
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
@@ -86,6 +87,7 @@ class MemoDatabase:
         """Create the memos table and required indexes if missing."""
         if self.backend == "local" and self.path is not None:
             self.path.parent.mkdir(parents=True, exist_ok=True)
+            os.chmod(self.path.parent, 0o700)
         with self.connection() as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS memos (
@@ -106,6 +108,8 @@ class MemoDatabase:
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_memos_shortcut "
                 "ON memos(shortcut) WHERE shortcut IS NOT NULL"
             )
+        if self.backend == "local" and self.path is not None:
+            os.chmod(self.path, 0o600)
 
     @staticmethod
     def next_idx(conn) -> int:
