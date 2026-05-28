@@ -1,5 +1,7 @@
 """Tests for ConfigManager.coerce and ConfigManager.validate."""
 
+import shutil
+
 import pytest
 
 from koda.config import ConfigManager, ValidationError
@@ -116,9 +118,40 @@ class TestValidate:
         with pytest.raises(ValidationError):
             ConfigManager.validate("git.sync_format", "yaml")
 
-    @pytest.mark.parametrize("key", ["db.path", "turso.url", "turso.token", "git.sync_path", "exec.shell"])
+    @pytest.mark.parametrize("key", ["db.path", "turso.url", "turso.token", "git.sync_path"])
     def test_no_validator_passthrough(self, key):
         assert ConfigManager.validate(key, "anything") == "anything"
 
     def test_unknown_key_passthrough(self):
         assert ConfigManager.validate("unknown.key", "x") == "x"
+
+
+class TestExecShell:
+    @pytest.mark.parametrize("shell", ["sh", "bash"])
+    def test_allowlisted_resolvable_shell_valid(self, shell):
+        if shutil.which(shell) is None:
+            pytest.skip(f"{shell} not installed")
+        assert ConfigManager.validate("exec.shell", shell) == shell
+
+    def test_absolute_path_to_allowlisted_shell_valid(self):
+        resolved = shutil.which("sh")
+        if resolved is None:
+            pytest.skip("sh not installed")
+        assert ConfigManager.validate("exec.shell", resolved) == resolved
+
+    def test_arbitrary_binary_rejected(self):
+        with pytest.raises(ValidationError):
+            ConfigManager.validate("exec.shell", "/tmp/evil")
+
+    def test_non_allowlisted_name_rejected(self):
+        with pytest.raises(ValidationError):
+            ConfigManager.validate("exec.shell", "python")
+
+    def test_nonexistent_allowlisted_shell_rejected(self, monkeypatch):
+        monkeypatch.setattr("koda.config.shutil.which", lambda _: None)
+        with pytest.raises(ValidationError):
+            ConfigManager.validate("exec.shell", "bash")
+
+    def test_empty_rejected(self):
+        with pytest.raises(ValidationError):
+            ConfigManager.validate("exec.shell", "")

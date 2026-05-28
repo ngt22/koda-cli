@@ -541,10 +541,12 @@ payload_file = "koda-sync.jsonl"    # JSONL file inside sync_path
 sync_format = "jsonl"               # wire format (jsonl only)
 
 [exec]
-shell = "sh"      # shell used by exec
+shell = "sh"      # shell used by exec — restricted to: sh, bash, zsh, fish
 ```
 
 Priority order: **CLI flags > environment variables > config file > built-in defaults**
+
+> **Security**: `exec.shell` is restricted to an allowlist (`sh`, `bash`, `zsh`, `fish`) that must resolve to an installed executable. This prevents a tampered config from redirecting `koda x` to an arbitrary binary. The config file (`config.toml`) and database are created with `0600` permissions and their parent directories with `0700`, so a plaintext Turso token is not world-readable.
 
 ## Environment variables
 
