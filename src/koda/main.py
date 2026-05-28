@@ -836,6 +836,13 @@ def exec_memo(
     row = resolve_ref(ref)
     content = _apply_vars(row.content.strip() if row.content else "", vars)
     shell = config.exec_shell
+    try:
+        ConfigManager.validate("exec.shell", shell)
+    except ValidationError:
+        exit_error(
+            f"Refusing to exec: exec.shell {shell!r} is not allowed "
+            f"({ConfigManager.error_message('exec.shell')})."
+        )
     os.execvp(shell, [shell, "-c", content])
 
 

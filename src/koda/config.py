@@ -2,6 +2,7 @@
 
 import json
 import os
+import shutil
 import tomllib
 from dataclasses import asdict, dataclass, field, fields, replace
 from enum import Enum
@@ -40,6 +41,20 @@ COLUMN_DEFS: dict = {
 
 
 GIT_SYNC_FORMAT_JSONL = "jsonl"
+
+EXEC_SHELL_ALLOWLIST = ("sh", "bash", "zsh", "fish")
+
+
+def valid_exec_shell(v: Any) -> bool:
+    """True if ``v`` names an allowlisted shell that resolves to an existing
+    absolute executable. Guards `koda x` against arbitrary-binary redirection
+    via a tampered config (e.g. exec.shell = '/tmp/evil')."""
+    if not isinstance(v, str) or not v.strip():
+        return False
+    if Path(v).name not in EXEC_SHELL_ALLOWLIST:
+        return False
+    resolved = shutil.which(v)
+    return bool(resolved) and Path(resolved).is_absolute()
 
 
 class DefaultCmd(str, Enum):
@@ -139,7 +154,12 @@ _FIELD_SPECS: Dict[str, FieldSpec] = {
         lambda v: str(v).strip().lower() == GIT_SYNC_FORMAT_JSONL,
         f"must be {GIT_SYNC_FORMAT_JSONL!r} (case-insensitive)",
     ),
-    "exec.shell":    FieldSpec(str),
+    "exec.shell":    FieldSpec(
+        str,
+        valid_exec_shell,
+        f"must be an installed shell ({', '.join(EXEC_SHELL_ALLOWLIST)}) "
+        "resolvable to an absolute path",
+    ),
 }
 
 ALL_KEYS: List[str] = list(_FIELD_SPECS.keys())
@@ -207,6 +227,7 @@ class ConfigManager:
     def write_raw(self, data: dict) -> None:
         """Serialize data to TOML and write to config_path."""
         self.config_path.parent.mkdir(parents=True, exist_ok=True)
+        os.chmod(self.config_path.parent, 0o700)
         lines: List[str] = []
         for section, values in data.items():
             lines.append(f"[{section}]")
@@ -222,6 +243,7 @@ class ConfigManager:
                     lines.append(f"{k} = {v}")
             lines.append("")
         self.config_path.write_text("\n".join(lines), encoding="utf-8")
+        os.chmod(self.config_path, 0o600)
 
     @staticmethod
     def coerce(key: str, raw: str) -> Any:
