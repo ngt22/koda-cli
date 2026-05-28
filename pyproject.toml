@@ -27,6 +27,9 @@ dependencies = [
 [project.optional-dependencies]
 turso = ["libsql-experimental>=0.0.1"]
 
+[dependency-groups]
+dev = ["pytest", "pytest-cov"]
+
 [project.urls]
 Homepage = "https://github.com/ngt22/koda-cli"
 Repository = "https://github.com/ngt22/koda-cli.git"
@@ -44,3 +47,7 @@ include = ["src/koda"]
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--cov=koda --cov-report=term-missing"

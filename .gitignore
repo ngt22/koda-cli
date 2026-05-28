@@ -9,6 +9,12 @@ wheels/
 # Virtual environments
 .venv
 
+# Test / coverage artifacts
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+
 # AI coding agents
 AGENTS.md
 CLAUDE.md
