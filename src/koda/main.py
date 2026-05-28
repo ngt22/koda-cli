@@ -304,10 +304,15 @@ def _add_impl(
     init_db()
     content = ""
 
-    if not sys.stdin.isatty():
-        content = sys.stdin.read().strip()
-    elif text:
+    if text:
         content = " ".join(text)
+        if not sys.stdin.isatty() and sys.stdin.read().strip():
+            print(
+                "Warning: ignoring piped stdin because text arguments were given.",
+                file=sys.stderr,
+            )
+    elif not sys.stdin.isatty():
+        content = sys.stdin.read().strip()
     else:
         editor = os.environ.get('EDITOR', 'vim')
         with tempfile.NamedTemporaryFile(suffix=".tmp", mode='w+', delete=False) as tf:
