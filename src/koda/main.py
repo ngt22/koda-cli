@@ -92,6 +92,7 @@ app = typer.Typer(
     no_args_is_help=False,
 )
 console = Console()
+err_console = Console(stderr=True)
 
 _config_manager = ConfigManager()
 config, _config_sources = _config_manager.load()
@@ -295,6 +296,40 @@ def update_memo_full(memo_id: int, content: str, tags: str, shortcut: Optional[s
     db.update_memo(memo_id, content, tags, shortcut, created_at, now)
 
 
+def _resolve_add_content(text: Optional[List[str]]) -> str:
+    """Resolve entry content with priority: argument > stdin > $EDITOR.
+
+    An argument always wins; piped stdin is only used when no argument is
+    given. When both are present the stdin data is ignored with a warning
+    on stderr (#49). $EDITOR only opens on an interactive stdin.
+    """
+    stdin_content = "" if sys.stdin.isatty() else sys.stdin.read().strip()
+
+    if text:
+        if stdin_content:
+            err_console.print(
+                "[yellow]Warning: both argument and stdin provided; using argument.[/yellow]"
+            )
+        return " ".join(text)
+
+    if stdin_content:
+        return stdin_content
+
+    if not sys.stdin.isatty():
+        # Non-interactive with empty stdin: cannot open $EDITOR.
+        return ""
+
+    editor = os.environ.get('EDITOR', 'vim')
+    with tempfile.NamedTemporaryFile(suffix=".tmp", mode='w+', delete=False) as tf:
+        temp_path = tf.name
+    try:
+        subprocess.call([editor, temp_path])
+        with open(temp_path, 'r') as f:
+            return f.read().strip()
+    finally:
+        Path(temp_path).unlink(missing_ok=True)
+
+
 def _add_impl(
     text: Optional[List[str]] = None,
     tag: Optional[List[str]] = None,
@@ -302,22 +337,7 @@ def _add_impl(
 ) -> None:
     shortcut = _validate_shortcut(shortcut)
     init_db()
-    content = ""
-
-    if not sys.stdin.isatty():
-        content = sys.stdin.read().strip()
-    elif text:
-        content = " ".join(text)
-    else:
-        editor = os.environ.get('EDITOR', 'vim')
-        with tempfile.NamedTemporaryFile(suffix=".tmp", mode='w+', delete=False) as tf:
-            temp_path = tf.name
-        try:
-            subprocess.call([editor, temp_path])
-            with open(temp_path, 'r') as f:
-                content = f.read().strip()
-        finally:
-            Path(temp_path).unlink(missing_ok=True)
+    content = _resolve_add_content(text)
 
     if not content:
         console.print("[yellow]Aborted: Empty content.[/yellow]")

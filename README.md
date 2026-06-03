@@ -134,6 +134,10 @@ history | grep ffmpeg | tail -1 | koda a -t ffmpeg
 kubectl get pods -o wide    | koda a -t k8s
 ```
 
+Input priority is **argument > stdin > `$EDITOR`**. If you pass a text
+argument it always wins; piped stdin is only used when no argument is given.
+When both are supplied the argument is used and a warning is printed to stderr.
+
 ---
 
 ### Raw — body-only output
