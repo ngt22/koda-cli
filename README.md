@@ -134,6 +134,11 @@ history | grep ffmpeg | tail -1 | koda a -t ffmpeg
 kubectl get pods -o wide    | koda a -t k8s
 ```
 
+Content source precedence: **text arguments > piped stdin > `$EDITOR`**. When
+arguments are given, piped stdin is ignored (with a warning on stderr). This
+keeps `koda a "text"` working in non-interactive shells (cron, IDE tasks,
+sandboxes) where stdin is not a TTY.
+
 ---
 
 ### Raw — body-only output
