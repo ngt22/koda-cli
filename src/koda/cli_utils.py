@@ -9,6 +9,7 @@ from rich.console import Console
 
 
 console = Console()
+stderr_console = Console(stderr=True)
 
 
 class ExitCode(IntEnum):
@@ -30,7 +31,7 @@ def exit_error(
     can preserve informational ("not found") wording while still exiting with
     a non-zero status.
     """
-    console.print(f"[{style}]{message}[/{style}]")
+    stderr_console.print(f"[{style}]{message}[/{style}]")
     raise typer.Exit(code=int(code))
 
 
