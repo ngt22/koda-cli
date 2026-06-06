@@ -83,6 +83,42 @@ EXAMPLE_TEMPLATE = (
 )
 
 
+DB_PATH_OVERRIDE_ENV = "KODA_DB_PATH_OVERRIDE"
+
+
+def allowed_db_roots() -> list[Path]:
+    """Directories a local db.path may live under: the default koda data dir
+    (~/.local/share/koda) and, when set, $XDG_DATA_HOME/koda."""
+    roots = [DEFAULT_DB_DIR]
+    xdg = os.getenv("XDG_DATA_HOME")
+    if xdg and xdg.strip():
+        roots.append(Path(xdg) / "koda")
+    return [r.expanduser() for r in roots]
+
+
+def db_path_allowed(v: Any) -> bool:
+    """True if ``v`` is a local DB path inside an allowed data dir. Blocks
+    ``KODA_DB_PATH=/home/victim/.ssh/authorized_keys`` and similar env/config
+    injection from creating arbitrary files via init_db. The
+    ``KODA_DB_PATH_OVERRIDE`` env var (truthy) lifts the restriction for CI and
+    tests that need a temp location."""
+    if os.getenv(DB_PATH_OVERRIDE_ENV):
+        return True
+    if not isinstance(v, str) or not v.strip():
+        return False
+    try:
+        resolved = Path(v).expanduser().resolve()
+    except (OSError, RuntimeError, ValueError):
+        return False
+    for root in allowed_db_roots():
+        try:
+            resolved.relative_to(root.resolve())
+            return True
+        except ValueError:
+            continue
+    return False
+
+
 def valid_payload_file(v: Any) -> bool:
     """True if ``v`` is a safe relative payload path. Rejects empty values,
     absolute paths, ``..`` traversal, and any path with a ``.git`` component.
@@ -183,7 +219,12 @@ _FIELD_SPECS: dict[str, FieldSpec] = {
         ),
         f'must include "idx"; available: {", ".join(VALID_LIST_COLUMNS)}',
     ),
-    "db.path": FieldSpec(str),
+    "db.path": FieldSpec(
+        str,
+        db_path_allowed,
+        "must be inside the koda data dir (~/.local/share/koda or "
+        "$XDG_DATA_HOME/koda); set KODA_DB_PATH_OVERRIDE=1 to allow another location",
+    ),
     "db.backend": FieldSpec(
         str,
         lambda v: v in tuple(b.value for b in DbBackend),

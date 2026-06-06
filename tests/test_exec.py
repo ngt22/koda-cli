@@ -17,6 +17,7 @@ def _base_env(tmp_path, db_path):
 
     env = {k: os.environ[k] for k in ENV_KEYS if k in os.environ}
     env["KODA_DB_PATH"] = str(db_path)
+    env["KODA_DB_PATH_OVERRIDE"] = "1"  # allow the temp DB path outside the data dir
     env["KODA_CONFIG_PATH"] = str(tmp_path / "nonexistent.toml")
     return env
 

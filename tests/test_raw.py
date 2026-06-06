@@ -55,6 +55,7 @@ def test_raw_subprocess_is_newline_terminated(tmp_path, monkeypatch):
 
     env = {
         "KODA_DB_PATH": str(db_path),
+        "KODA_DB_PATH_OVERRIDE": "1",  # allow the temp DB path outside the data dir
         "KODA_CONFIG_PATH": str(tmp_path / "nonexistent.toml"),
         "PATH": __import__("os").environ.get("PATH", ""),
     }

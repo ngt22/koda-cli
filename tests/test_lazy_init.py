@@ -9,6 +9,9 @@ without HOME/env and makes it testable.
 import subprocess
 import sys
 
+import pytest
+import typer
+
 import koda.runtime as runtime
 from koda.config import Config
 from koda.db import MemoDatabase
@@ -53,6 +56,9 @@ def test_get_db_is_lazy_and_cached(monkeypatch, tmp_path):
     cfg.turso_url = ""
     cfg.turso_token = ""
 
+    # A temp path lives outside the koda data dir; the override env lets tests
+    # use it (the same escape hatch CI relies on).
+    monkeypatch.setenv("KODA_DB_PATH_OVERRIDE", "1")
     monkeypatch.setattr(runtime, "_db", None)
     monkeypatch.setattr(runtime, "get_config", lambda: cfg)
 
@@ -60,3 +66,18 @@ def test_get_db_is_lazy_and_cached(monkeypatch, tmp_path):
     assert isinstance(db, MemoDatabase)
     # Second call returns the cached handle.
     assert runtime.get_db() is db
+
+
+def test_get_db_rejects_path_outside_data_dir(monkeypatch):
+    """A local db.path outside the data dir (e.g. via KODA_DB_PATH injection)
+    is refused before any file is created."""
+    cfg = Config()
+    cfg.db_backend = "local"
+    cfg.db_path = "/tmp/evil.db"
+
+    monkeypatch.delenv("KODA_DB_PATH_OVERRIDE", raising=False)
+    monkeypatch.setattr(runtime, "_db", None)
+    monkeypatch.setattr(runtime, "get_config", lambda: cfg)
+
+    with pytest.raises(typer.Exit):
+        runtime.get_db()
