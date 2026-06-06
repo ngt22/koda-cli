@@ -3,8 +3,15 @@
 from koda.git_sync import MemoMerger
 
 
-def entry(uid, idx, content="body", tags="", shortcut=None,
-          created_at="2026-01-01 00:00:00", modified_at=None):
+def entry(
+    uid,
+    idx,
+    content="body",
+    tags="",
+    shortcut=None,
+    created_at="2026-01-01 00:00:00",
+    modified_at=None,
+):
     return {
         "uid": uid,
         "idx": idx,
@@ -90,11 +97,13 @@ def test_shortcut_kept_when_owned_by_same_uid(db):
 
 def test_batch_mixed_outcomes(db):
     db.add_memo("uid0001", 0, None, "existing", "", "2026-01-01 00:00:00", "2026-01-01 00:00:00")
-    inserted, updated, skipped, _ = MemoMerger(db).merge([
-        entry("uid0002", 1, content="brand-new"),
-        entry("uid0001", 0, content="updated", modified_at="2026-05-01 00:00:00"),
-        entry("uid0003", 2, content="another-new"),
-    ])
+    inserted, updated, skipped, _ = MemoMerger(db).merge(
+        [
+            entry("uid0002", 1, content="brand-new"),
+            entry("uid0001", 0, content="updated", modified_at="2026-05-01 00:00:00"),
+            entry("uid0003", 2, content="another-new"),
+        ]
+    )
     assert inserted == 2
     assert updated == 1
     assert skipped == 0

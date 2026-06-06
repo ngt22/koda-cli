@@ -1,8 +1,5 @@
 """Shared constants for koda: timestamps, separators, schema column names."""
 
-from typing import Tuple
-
-
 DATETIME_FMT = "%Y-%m-%d %H:%M:%S"
 
 TAG_SEPARATOR = ","
@@ -11,7 +8,13 @@ TAG_SEPARATOR = ","
 # during the swap; chosen high enough to fit any realistic memo count.
 IDX_TEMP_OFFSET = 2_000_000
 
-COLUMN_NAMES: Tuple[str, ...] = (
-    "id", "uid", "idx", "content", "tags", "shortcut",
-    "created_at", "modified_at",
+COLUMN_NAMES: tuple[str, ...] = (
+    "id",
+    "uid",
+    "idx",
+    "content",
+    "tags",
+    "shortcut",
+    "created_at",
+    "modified_at",
 )

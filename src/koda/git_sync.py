@@ -5,20 +5,19 @@ import shutil
 import subprocess
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Tuple
 
 from rich.console import Console
 
 from .cli_utils import exit_error
-from .config import Config, GIT_SYNC_FORMAT_JSONL
+from .config import GIT_SYNC_FORMAT_JSONL, Config
 from .constants import DATETIME_FMT
 from .db import IntegrityErrors, MemoDatabase
-
 
 console = Console()
 
 
 # ── Top-level helpers ────────────────────────────────────────────────────────
+
 
 def require_git_cli() -> None:
     if shutil.which("git") is None:
@@ -67,7 +66,7 @@ def atomic_write_bytes(path: Path, data: bytes) -> None:
     tmp.replace(path)
 
 
-def parse_memo_datetime(s: Optional[str]) -> datetime:
+def parse_memo_datetime(s: str | None) -> datetime:
     if not s or not str(s).strip():
         return datetime.min.replace(microsecond=0)
     try:
@@ -77,6 +76,7 @@ def parse_memo_datetime(s: Optional[str]) -> datetime:
 
 
 # ── JSONL payload (de)serialization ──────────────────────────────────────────
+
 
 class GitSyncPayload:
     """Encode/decode the shared JSONL memo payload."""
@@ -130,7 +130,7 @@ class GitSyncPayload:
         }
 
     @staticmethod
-    def load(data: bytes) -> List[dict]:
+    def load(data: bytes) -> list[dict]:
         if not data.strip():
             return []
         try:
@@ -158,7 +158,7 @@ class GitSyncPayload:
                 "SELECT uid, idx, shortcut, content, tags, created_at, modified_at "
                 "FROM memos ORDER BY uid ASC, id ASC"
             ).fetchall()
-        memos: List[dict] = []
+        memos: list[dict] = []
         for uid, idx, shortcut, content, tags, created_at, modified_at in rows:
             ca = created_at or ""
             ma = modified_at if modified_at else (ca or "")
@@ -183,6 +183,7 @@ class GitSyncPayload:
 
 # ── Git CLI wrapper ──────────────────────────────────────────────────────────
 
+
 class GitSyncRepo:
     """Thin wrapper around git operations in the sync clone."""
 
@@ -206,7 +207,7 @@ class GitSyncRepo:
         )
         return bool((r.stdout or "").strip())
 
-    def preferred_remote(self) -> Optional[str]:
+    def preferred_remote(self) -> str | None:
         r = subprocess.run(
             ["git", "-C", str(self.sync_root), "remote"],
             capture_output=True,
@@ -221,7 +222,7 @@ class GitSyncRepo:
             return "origin"
         return names[0]
 
-    def current_branch(self) -> Optional[str]:
+    def current_branch(self) -> str | None:
         r = subprocess.run(
             ["git", "-C", str(self.sync_root), "rev-parse", "--abbrev-ref", "HEAD"],
             capture_output=True,
@@ -251,17 +252,19 @@ class GitSyncRepo:
         branch = self.current_branch()
         if not branch:
             exit_error(
-                "Cannot git pull in detached HEAD in the sync clone. Check out a branch, then retry."
+                "Cannot git pull in detached HEAD in the sync clone. "
+                "Check out a branch, then retry."
             )
         if self.has_upstream():
-            cmd: List[str] = ["git", "-C", str(self.sync_root), "pull", "--rebase"]
+            cmd: list[str] = ["git", "-C", str(self.sync_root), "pull", "--rebase"]
         else:
             cmd = ["git", "-C", str(self.sync_root), "pull", "--rebase", remote, branch]
         try:
             subprocess.run(cmd, check=True, capture_output=True, text=True)
         except subprocess.CalledProcessError as e:
             console.print(
-                "[red]git pull --rebase failed in the sync clone. Resolve conflicts there, then retry.[/red]"
+                "[red]git pull --rebase failed in the sync clone. "
+                "Resolve conflicts there, then retry.[/red]"
             )
             if e.stderr:
                 console.print(f"[dim]{e.stderr.strip()}[/dim]")
@@ -270,7 +273,8 @@ class GitSyncRepo:
     def push_if_remote(self) -> None:
         if not self.has_remote():
             console.print(
-                "[yellow]No Git remotes configured; payload committed locally only (skipping push).[/yellow]"
+                "[yellow]No Git remotes configured; "
+                "payload committed locally only (skipping push).[/yellow]"
             )
             return
         remote = self.preferred_remote()
@@ -279,17 +283,19 @@ class GitSyncRepo:
         branch = self.current_branch()
         if not branch:
             exit_error(
-                "Cannot git push in detached HEAD in the sync clone. Check out a branch, then retry."
+                "Cannot git push in detached HEAD in the sync clone. "
+                "Check out a branch, then retry."
             )
         if self.has_upstream():
-            cmd: List[str] = ["git", "-C", str(self.sync_root), "push"]
+            cmd: list[str] = ["git", "-C", str(self.sync_root), "push"]
         else:
             cmd = ["git", "-C", str(self.sync_root), "push", "-u", remote, branch]
         try:
             subprocess.run(cmd, check=True, capture_output=True, text=True)
         except subprocess.CalledProcessError as e:
             console.print(
-                "[red]git push failed. Configure upstream/remotes or run push from that clone manually.[/red]"
+                "[red]git push failed. "
+                "Configure upstream/remotes or run push from that clone manually.[/red]"
             )
             if e.stderr:
                 console.print(f"[dim]{e.stderr.strip()}[/dim]")
@@ -298,6 +304,7 @@ class GitSyncRepo:
 
 # ── Merge into local DB ─────────────────────────────────────────────────────
 
+
 class MemoMerger:
     """Merge remote JSONL entries into the local memos table by uid + modified_at."""
 
@@ -305,12 +312,10 @@ class MemoMerger:
         self.db = db
 
     @staticmethod
-    def _shortcut_usable(conn, uid: str, shortcut: Optional[str]) -> Optional[str]:
+    def _shortcut_usable(conn, uid: str, shortcut: str | None) -> str | None:
         if shortcut is None or shortcut == "":
             return shortcut
-        existing = conn.execute(
-            "SELECT uid FROM memos WHERE shortcut = ?", (shortcut,)
-        ).fetchone()
+        existing = conn.execute("SELECT uid FROM memos WHERE shortcut = ?", (shortcut,)).fetchone()
         if existing is None:
             return shortcut
         (existing_uid,) = existing
@@ -338,7 +343,7 @@ class MemoMerger:
                 (MemoDatabase.next_idx(conn), memo_id),
             )
 
-    def merge(self, entries: List[dict]) -> Tuple[int, int, int, int]:
+    def merge(self, entries: list[dict]) -> tuple[int, int, int, int]:
         """Return (inserted, updated, skipped, shortcut_dropped)."""
         inserted = updated = skipped = shortcut_dropped = 0
         with self.db.connection() as conn:
@@ -361,9 +366,8 @@ class MemoMerger:
                     continue
                 content = rm.get("content") if rm.get("content") is not None else ""
                 tags = rm.get("tags") if rm.get("tags") is not None else ""
-                created_at = (
-                    str(rm.get("created_at") or "").strip()
-                    or datetime.now().strftime(DATETIME_FMT)
+                created_at = str(rm.get("created_at") or "").strip() or datetime.now().strftime(
+                    DATETIME_FMT
                 )
                 modified_at = str(rm.get("modified_at") or "").strip() or created_at
                 raw_sc = rm.get("shortcut")
@@ -382,7 +386,8 @@ class MemoMerger:
                         shortcut_dropped += 1
                     try:
                         conn.execute(
-                            "INSERT INTO memos (uid, idx, shortcut, content, tags, created_at, modified_at) "
+                            "INSERT INTO memos "
+                            "(uid, idx, shortcut, content, tags, created_at, modified_at) "
                             "VALUES (?, ?, ?, ?, ?, ?, ?)",
                             (uid, pick_idx, use_sc, content, tags, created_at, modified_at),
                         )
@@ -391,14 +396,16 @@ class MemoMerger:
                         pick_idx = MemoDatabase.next_idx(conn)
                         try:
                             conn.execute(
-                                "INSERT INTO memos (uid, idx, shortcut, content, tags, created_at, modified_at) "
+                                "INSERT INTO memos "
+                                "(uid, idx, shortcut, content, tags, created_at, modified_at) "
                                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
                                 (uid, pick_idx, use_sc, content, tags, created_at, modified_at),
                             )
                             inserted += 1
                         except IntegrityErrors:
                             conn.execute(
-                                "INSERT INTO memos (uid, idx, shortcut, content, tags, created_at, modified_at) "
+                                "INSERT INTO memos "
+                                "(uid, idx, shortcut, content, tags, created_at, modified_at) "
                                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
                                 (uid, pick_idx, None, content, tags, created_at, modified_at),
                             )

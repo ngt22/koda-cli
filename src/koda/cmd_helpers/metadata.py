@@ -1,7 +1,6 @@
 """Editor metadata footer parsing (used by `koda edit`)."""
 
 import re
-from typing import List, Optional
 
 
 def normalize_footer_segment(segment: str) -> str:
@@ -29,14 +28,14 @@ def looks_like_koda_footer(segment: str) -> bool:
     return bool(lines and lines[0].strip().startswith("tags:"))
 
 
-def first_footer_index(parts: List[str]) -> Optional[int]:
+def first_footer_index(parts: list[str]) -> int | None:
     for i in range(1, len(parts)):
         if looks_like_koda_footer(parts[i]):
             return i
     return None
 
 
-def last_footer_segment(parts: List[str]) -> Optional[str]:
+def last_footer_segment(parts: list[str]) -> str | None:
     for seg in reversed(parts):
         if looks_like_koda_footer(seg):
             return normalize_footer_segment(seg)

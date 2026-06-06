@@ -7,8 +7,6 @@ CLI as a real subprocess and inspect its output.
 import subprocess
 import sys
 
-import pytest
-
 from koda.db import MemoDatabase
 
 ENV_KEYS = ("PATH", "HOME")
@@ -53,7 +51,7 @@ def test_three_line_script_runs_in_one_shell(tmp_path):
 
 
 def test_for_loop_body(tmp_path):
-    result = _run_x(tmp_path, "for i in 1 2 3; do\n  echo \"n=$i\"\ndone")
+    result = _run_x(tmp_path, 'for i in 1 2 3; do\n  echo "n=$i"\ndone')
     assert result.returncode == 0, result.stderr
     assert result.stdout.split() == ["n=1", "n=2", "n=3"]
 

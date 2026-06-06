@@ -12,14 +12,15 @@ class MemoRow:
     database layer: id, uid, idx, content, tags, shortcut, created_at,
     modified_at.
     """
+
     id: int
     uid: str
     idx: int
-    content: Optional[str]
-    tags: Optional[str]
-    shortcut: Optional[str]
-    created_at: Optional[str]
-    modified_at: Optional[str] = ""
+    content: str | None
+    tags: str | None
+    shortcut: str | None
+    created_at: str | None
+    modified_at: str | None = ""
 
     @classmethod
     def from_row(cls, row) -> Optional["MemoRow"]:
