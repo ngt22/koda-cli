@@ -1,5 +1,6 @@
 """Database layer for koda: connection, schema, CRUD over the memos table."""
 
+import hashlib
 import os
 import sqlite3
 from collections.abc import Callable, Iterator
@@ -7,6 +8,21 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from .models import MemoRow
+
+# Number of hex chars kept from the sha1 hash to form a uid. 16 hex = 64 bits,
+# chosen so birthday/preimage attacks against the sync merge key are infeasible
+# (the original 7 hex = 28 bits collided after ~16k entries). Widening is a
+# schema migration; see _migration_0002_widen_uid.
+UID_LENGTH = 16
+
+
+def compute_uid(content: str, created_at: str) -> str:
+    """Return the stable sync uid: first ``UID_LENGTH`` hex chars of
+    ``sha1(content + created_at)``. Deterministic across machines, so two peers
+    that hold the same entry derive the same uid (the merge key)."""
+    raw = f"{content}{created_at}".encode()
+    return hashlib.sha1(raw).hexdigest()[:UID_LENGTH]
+
 
 try:
     import libsql_experimental as _libsql
@@ -66,11 +82,28 @@ def _migration_0001_initial_schema(conn) -> None:
     )
 
 
+def _migration_0002_widen_uid(conn) -> None:
+    """Widen uids from 7 to ``UID_LENGTH`` hex chars by recomputing each row's
+    uid from its current content + created_at.
+
+    uid = sha1(content + created_at)[:N], so for an unedited row the new uid
+    keeps the old 7-char value as its prefix; synced peers therefore converge
+    once both have migrated. A row whose content/created_at changed after
+    creation (uid is not refreshed on edit) gets a uid consistent with its
+    current text — its short prefix may change, which is why pull falls back to
+    a uid-prefix match for legacy short uids (see MemoMerger)."""
+    rows = conn.execute("SELECT id, content, created_at FROM memos").fetchall()
+    for memo_id, content, created_at in rows:
+        new_uid = compute_uid(content or "", created_at or "")
+        conn.execute("UPDATE memos SET uid = ? WHERE id = ?", (new_uid, memo_id))
+
+
 # Ordered list of schema migrations. Each entry N (0-based) advances the
 # database from PRAGMA user_version N to N+1. Append new migrations to the
 # end; never reorder or rewrite an existing one.
 _MIGRATIONS: list[Callable[[sqlite3.Connection], None]] = [
     _migration_0001_initial_schema,
+    _migration_0002_widen_uid,
 ]
 
 SCHEMA_VERSION = len(_MIGRATIONS)
@@ -238,6 +271,29 @@ class MemoDatabase:
                 (uid,),
             ).fetchone()
         return MemoRow.from_row(row)
+
+    @staticmethod
+    def _uid_prefix_like(prefix: str) -> str:
+        """Build a LIKE pattern matching uids that start with ``prefix``,
+        escaping LIKE wildcards so a literal prefix is matched."""
+        escaped = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        return escaped + "%"
+
+    def get_memo_by_uid_prefix(self, prefix: str) -> MemoRow | None:
+        """Resolve a memo by a uid prefix (e.g. a legacy 7-char uid against
+        widened 16-char uids). Returns the single match, or None when there is
+        no match or the prefix is ambiguous."""
+        if not prefix:
+            return None
+        pattern = self._uid_prefix_like(prefix)
+        with self.connection() as conn:
+            rows = conn.execute(
+                f"SELECT {self._MEMO_COLUMNS} FROM memos WHERE uid LIKE ? ESCAPE '\\' LIMIT 2",
+                (pattern,),
+            ).fetchall()
+        if len(rows) != 1:
+            return None
+        return MemoRow.from_row(rows[0])
 
     def add_memo(
         self,

@@ -2,7 +2,7 @@
 
 import sqlite3
 
-from koda.db import SCHEMA_VERSION, MemoDatabase
+from koda.db import SCHEMA_VERSION, UID_LENGTH, MemoDatabase, compute_uid
 
 
 def _user_version(db: MemoDatabase) -> int:
@@ -55,9 +55,13 @@ def test_up_migration_from_pre_versioning_schema(tmp_path):
 
     assert _user_version(db) == SCHEMA_VERSION
     assert "shortcut" in _columns(db)
-    # Existing data survives the migration.
-    row = db.get_memo_by_uid("abc1234")
+    # Existing data survives the migration, and its uid is widened to
+    # UID_LENGTH hex chars (recomputed from content + created_at).
+    expected_uid = compute_uid("legacy entry", "2026-01-01 00:00:00")
+    assert len(expected_uid) == UID_LENGTH
+    row = db.get_memo_by_uid(expected_uid)
     assert row is not None and row.content == "legacy entry"
+    assert len(row.uid) == UID_LENGTH
 
 
 def test_init_db_is_idempotent(tmp_path):
@@ -70,3 +74,40 @@ def test_init_db_is_idempotent(tmp_path):
 
     assert _user_version(db) == SCHEMA_VERSION
     assert db.get_memo_by_uid("uid0001") is not None
+
+
+def test_widen_uid_migration_preserves_prefix(tmp_path):
+    """A genuine pre-widening 7-char uid (the truncated hash) is lengthened to
+    UID_LENGTH while keeping the old value as its prefix, so synced peers stay
+    aligned after both migrate."""
+    content, created = "deploy prod", "2026-02-02 12:00:00"
+    full = compute_uid(content, created)
+    legacy = full[:7]
+
+    old_path = tmp_path / "v1.db"
+    conn = sqlite3.connect(old_path)
+    conn.executescript(
+        """
+        CREATE TABLE memos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, uid TEXT UNIQUE, idx INTEGER UNIQUE,
+            shortcut TEXT, content TEXT, tags TEXT, created_at TIMESTAMP, modified_at TIMESTAMP
+        );
+        PRAGMA user_version = 1;
+        """
+    )
+    conn.execute(
+        "INSERT INTO memos (uid, idx, content, tags, created_at, modified_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (legacy, 0, content, "", created, created),
+    )
+    conn.commit()
+    conn.close()
+
+    db = MemoDatabase(backend="local", path=old_path)
+    db.init_db()
+
+    row = db.get_memo_by_uid(full)
+    assert row is not None
+    assert row.uid == full and row.uid.startswith(legacy)
+    # The legacy short uid still resolves via prefix lookup.
+    assert db.get_memo_by_uid_prefix(legacy) is not None

@@ -43,7 +43,7 @@ REQUIRED_LIST_COLUMNS = {"idx"}
 
 COLUMN_DEFS: dict = {
     "idx": ("IDX", {"justify": "right", "width": 4}),
-    "uid": ("UID", {"width": 7, "style": "dim"}),
+    "uid": ("UID", {"width": 16, "style": "dim"}),
     "sc": ("SC", {"width": 10, "style": "bold green"}),
     "tags": ("Tags", {"style": "magenta", "width": 15}),
     "content": ("Content", {"ratio": 1}),

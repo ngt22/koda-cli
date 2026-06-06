@@ -11,7 +11,7 @@ from rich.console import Console
 from .cli_utils import exit_error
 from .config import GIT_SYNC_FORMAT_JSONL, Config
 from .constants import DATETIME_FMT
-from .db import MemoDatabase
+from .db import UID_LENGTH, MemoDatabase
 
 console = Console()
 
@@ -394,6 +394,18 @@ class MemoMerger:
                     "FROM memos WHERE uid = ?",
                     (uid,),
                 ).fetchone()
+                if local_row is None and len(uid) < UID_LENGTH:
+                    # Legacy payload: a pre-widening peer still emits 7-char
+                    # uids. Match them to the widened local uid by prefix so the
+                    # entry updates in place instead of duplicating. Only an
+                    # unambiguous single match is accepted.
+                    candidates = conn.execute(
+                        "SELECT id, uid, idx, content, tags, shortcut, created_at, modified_at "
+                        "FROM memos WHERE uid LIKE ? ESCAPE '\\' LIMIT 2",
+                        (MemoDatabase._uid_prefix_like(uid),),
+                    ).fetchall()
+                    if len(candidates) == 1:
+                        local_row = candidates[0]
                 if local_row is None:
                     # uid is absent (local_row is None), idx and shortcut are
                     # pre-resolved to free values, so this INSERT cannot violate
