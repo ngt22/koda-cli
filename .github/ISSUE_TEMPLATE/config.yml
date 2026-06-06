@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Question or idea (Discussions)
+    url: https://github.com/ngt22/koda-cli/discussions
+    about: Ask a question or float an idea before opening an issue.
+  - name: Contributing guide
+    url: https://github.com/ngt22/koda-cli/blob/main/CONTRIBUTING.md
+    about: Dev setup, conventions, and the PR checklist.
