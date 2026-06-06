@@ -15,7 +15,8 @@ wheels/
 htmlcov/
 .pytest_cache/
 
-# AI coding agents
+# AI coding agents — personal, local-only files (see CONTRIBUTING.md).
+# Contributor-facing rules live in CONTRIBUTING.md, not in these.
 AGENTS.md
 CLAUDE.md
 .claude/
