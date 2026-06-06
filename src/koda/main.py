@@ -233,6 +233,10 @@ def emit_raw(ref: Optional[str], vars: Optional[List[str]] = None) -> None:
     row = resolve_ref(ref)
     content = _apply_vars(row.content if row.content is not None else "", vars)
     content = _strip_raw_inline_comments(content)
+    # POSIX text files end in a newline; append one when the body is non-empty
+    # and not already newline-terminated so `koda raw | wc -l` and friends work.
+    if content and not content.endswith("\n"):
+        content += "\n"
     sys.stdout.write(content)
 
 
