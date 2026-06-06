@@ -22,6 +22,7 @@ A **text store** for the terminal. Save any text — commands, paths, templates,
 - [Turso (remote database)](#turso-remote-database)
 - [Git sync](#git-sync-multi-machine-sharing-via-github)
 - [Example uses](#example-uses)
+- [Security model](#security-model)
 - [Development](#development)
 - [License](#license)
 
@@ -730,6 +731,21 @@ koda pull   # git pull the clone, merge koda-sync.jsonl into local DB
 
 `push` does a `git pull --rebase` before writing the payload so the branch stays linear. `pull` merges by `uid` — entries that already exist locally are updated only if the incoming `modified_at` is newer.
 
+### Remote trust boundary
+
+The sync remote is **outside your trust boundary**. Anyone who can write to it (a compromised account, a shared repo, a malicious collaborator) can change the body of any synced entry — including one bound to a shortcut you `exec`. To contain this:
+
+- **Entries arriving via `pull` are marked `source=remote`.** `koda exec`/`koda x` **prompts for confirmation before running a `source=remote` entry**, so a silently rewritten `deploy` snippet cannot execute unattended. Reviewing the entry with `koda edit` clears the flag back to `local`; `koda x -f/--force` skips the prompt (e.g. in trusted scripts).
+- **Preview before you merge.** `koda pull --dry-run` shows the exact insert/update diff *without* touching the local database, so you can inspect incoming changes first.
+- **The `source` flag never crosses the wire.** It is local-only state and is not written to (or read from) `koda-sync.jsonl`, so a remote cannot label its own entries `local` to dodge the prompt.
+
+```bash
+koda pull --dry-run   # show what would change, write nothing
+koda pull             # merge; new/updated entries become source=remote
+koda x deploy         # prompts because 'deploy' came from the remote
+koda x deploy -f      # run without prompting
+```
+
 ### Setting up a second machine
 
 ```bash
@@ -820,6 +836,30 @@ koda x backup   # creates src-20260505-1430.tar.gz each time
 → **[See all examples in EXAMPLES.md](EXAMPLES.md)**
 
 ---
+
+## Security model
+
+koda runs shell commands and syncs data across machines, so it is worth being
+explicit about what it does and does not defend against.
+
+**Threat model.** koda assumes the local user account and the local filesystem
+are trusted, and that **anything reaching the database from outside — a Git
+sync remote, the `KODA_*` environment variables, a hand-edited
+`config.toml` — is not.** The hardening below targets that boundary.
+
+| Area | Risk | Mitigation |
+|---|---|---|
+| `exec` shell | A tampered `exec.shell` could redirect `koda x` to an arbitrary binary | `exec.shell` is restricted to an allowlist (`sh`, `bash`, `zsh`, `fish`) that must resolve to an absolute executable |
+| Git sync poisoning | A writable remote could rewrite the body of an `exec` entry | `pull`-merged entries are marked `source=remote` and **`koda x` prompts before running them**; `pull --dry-run` previews changes; the `source` flag is local-only and never synced. See [Remote trust boundary](#remote-trust-boundary) |
+| uid collision | The old 7-char (28-bit) `uid` was collidable (~16k entries) / preimage-attackable, enabling sync poisoning | `uid` is 16 hex chars (64-bit); legacy short uids still resolve via prefix match |
+| `git.payload_file` | A relative path like `.git/hooks/post-merge` could overwrite a git hook that then executes | The validator and `push` reject any path with `..` or a `.git` component, or an absolute path |
+| `db.path` | `KODA_DB_PATH=~/.ssh/authorized_keys` could create files at an attacker-chosen location | A local `db.path` is restricted to `~/.local/share/koda` / `$XDG_DATA_HOME/koda`; `KODA_DB_PATH_OVERRIDE=1` is the explicit escape hatch for CI/tests |
+| File permissions | World-readable secrets on disk | `config.toml` and the database are written `0600`, their parent dirs `0700` |
+
+**Not in scope.** Entries are stored **in plaintext** — see the repeated note
+above: do not keep passwords, tokens, or other secrets in koda, and use a
+**private** repository for Git sync. koda also trusts the commands you choose
+to store and run; only `exec` entries you trust (or have reviewed).
 
 ## Development
 

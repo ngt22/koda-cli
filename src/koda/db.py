@@ -98,12 +98,23 @@ def _migration_0002_widen_uid(conn) -> None:
         conn.execute("UPDATE memos SET uid = ? WHERE id = ?", (new_uid, memo_id))
 
 
+def _migration_0003_add_source(conn) -> None:
+    """Add the ``source`` column: 'local' for entries authored or reviewed on
+    this machine, 'remote' for entries brought in by a Git sync. Existing rows
+    are the user's own work, so they default to 'local'. The column is local
+    state only — it is never written to or read from the sync payload."""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(memos)").fetchall()}
+    if "source" not in cols:
+        conn.execute("ALTER TABLE memos ADD COLUMN source TEXT NOT NULL DEFAULT 'local'")
+
+
 # Ordered list of schema migrations. Each entry N (0-based) advances the
 # database from PRAGMA user_version N to N+1. Append new migrations to the
 # end; never reorder or rewrite an existing one.
 _MIGRATIONS: list[Callable[[sqlite3.Connection], None]] = [
     _migration_0001_initial_schema,
     _migration_0002_widen_uid,
+    _migration_0003_add_source,
 ]
 
 SCHEMA_VERSION = len(_MIGRATIONS)
@@ -206,7 +217,7 @@ class MemoDatabase:
             sql += " AND shortcut IS NOT NULL AND shortcut != ''"
         return sql, tuple(params)
 
-    _MEMO_COLUMNS = "id, uid, idx, content, tags, shortcut, created_at, modified_at"
+    _MEMO_COLUMNS = "id, uid, idx, content, tags, shortcut, created_at, modified_at, source"
 
     def get_memos(
         self,
@@ -322,9 +333,11 @@ class MemoDatabase:
         modified_at: str,
     ) -> None:
         with self.connection() as conn:
+            # Editing an entry counts as reviewing it: reset source to 'local'
+            # so a previously remote-synced entry no longer warns on exec.
             conn.execute(
                 "UPDATE memos SET content = ?, tags = ?, shortcut = ?, "
-                "created_at = ?, modified_at = ? WHERE id = ?",
+                "created_at = ?, modified_at = ?, source = 'local' WHERE id = ?",
                 (content.strip(), tags, shortcut or None, created_at, modified_at, memo_id),
             )
 

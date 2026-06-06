@@ -30,6 +30,40 @@ def _obtain_remote_payload(local_payload_path: Path | None) -> bytes:
     return payload_path.read_bytes()
 
 
+def _preview(content: str, width: int = 50) -> str:
+    """First line of ``content``, collapsed and truncated for one-line display."""
+    first = (content or "").splitlines()[0] if content else ""
+    return first if len(first) <= width else first[: width - 1] + "…"
+
+
+def _print_merge_plan(data: bytes) -> None:
+    """Show what a pull would insert/update without writing (`--dry-run`)."""
+    try:
+        rows = git_sync.GitSyncPayload.load(data)
+    except Exception as e:
+        exit_error(f"Invalid sync payload: {e}")
+
+    plan = git_sync.MemoMerger(get_db()).plan(rows)
+    inserts = [p for p in plan if p["action"] == "insert"]
+    updates = [p for p in plan if p["action"] == "update"]
+    skips = [p for p in plan if p["action"] == "skip"]
+
+    if not (inserts or updates):
+        console.print("[green]Nothing to merge — local is up to date with the payload.[/green]")
+    for p in inserts:
+        console.print(
+            f"[green]+ insert[/green] {p['uid'][:12]}  [{p['idx']}]  {_preview(p['content'])}"
+        )
+    for p in updates:
+        console.print(
+            f"[yellow]~ update[/yellow] {p['uid'][:12]}  [{p['idx']}]  {_preview(p['content'])}"
+        )
+    console.print(
+        f"[dim]{len(inserts)} insert, {len(updates)} update, {len(skips)} skip "
+        f"— dry run, no changes written.[/dim]"
+    )
+
+
 def _merge_payload(data: bytes) -> None:
     """Load a JSONL payload and merge it into the local DB, printing a summary."""
     try:
@@ -114,13 +148,23 @@ def pull(
     local_payload_path: Path | None = typer.Option(
         None, "--file", help="Import from this JSONL file (skip git pull in the clone)."
     ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Show the insert/update diff without modifying the local database.",
+    ),
 ):
     """Pull memo JSONL from the Git clone (--file skips git); merge into local DB.
 
-    Merge key is uid + modified_at. Alias: `koda pull`.
+    Merge key is uid + modified_at. Merged entries are marked source=remote and
+    prompt before `koda x` runs them. Use --dry-run to preview the diff first.
+    Alias: `koda pull`.
     """
     init_db()
     data = _obtain_remote_payload(local_payload_path)
+    if dry_run:
+        _print_merge_plan(data)
+        return
     _merge_payload(data)
     console.print("[green]Pull complete.[/green]")
 

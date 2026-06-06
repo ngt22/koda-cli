@@ -358,87 +358,160 @@ class MemoMerger:
                 (MemoDatabase.next_idx(conn), memo_id),
             )
 
+    @staticmethod
+    def _sort_key(m: dict):
+        return (
+            parse_memo_datetime(m.get("modified_at")) or parse_memo_datetime(m.get("created_at")),
+            str(m.get("uid") or ""),
+        )
+
+    @staticmethod
+    def _normalize(rm: dict) -> dict | None:
+        """Coerce a raw remote record into the fields merge/plan need, or return
+        None when uid/idx are missing or unparseable (the entry is skipped)."""
+        uid = rm.get("uid")
+        if not uid or not isinstance(uid, str):
+            return None
+        try:
+            want_idx = int(rm["idx"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        content = rm.get("content") if rm.get("content") is not None else ""
+        tags = rm.get("tags") if rm.get("tags") is not None else ""
+        created_at = str(rm.get("created_at") or "").strip() or datetime.now().strftime(
+            DATETIME_FMT
+        )
+        modified_at = str(rm.get("modified_at") or "").strip() or created_at
+        raw_sc = rm.get("shortcut")
+        sc = raw_sc if raw_sc is None or raw_sc == "" else str(raw_sc)
+        return {
+            "uid": uid,
+            "want_idx": want_idx,
+            "content": content,
+            "tags": tags,
+            "created_at": created_at,
+            "modified_at": modified_at,
+            "sc": sc,
+            "r_ts": parse_memo_datetime(modified_at) or parse_memo_datetime(created_at),
+        }
+
+    @staticmethod
+    def _find_local(conn, uid: str):
+        """Locate the local row for a remote uid: exact match, or—for a legacy
+        short uid—an unambiguous uid-prefix match against widened local uids."""
+        local_row = conn.execute(
+            "SELECT id, uid, idx, content, tags, shortcut, created_at, modified_at "
+            "FROM memos WHERE uid = ?",
+            (uid,),
+        ).fetchone()
+        if local_row is None and len(uid) < UID_LENGTH:
+            # Legacy payload: a pre-widening peer still emits 7-char uids. Match
+            # them to the widened local uid by prefix so the entry updates in
+            # place instead of duplicating. Only an unambiguous match is used.
+            candidates = conn.execute(
+                "SELECT id, uid, idx, content, tags, shortcut, created_at, modified_at "
+                "FROM memos WHERE uid LIKE ? ESCAPE '\\' LIMIT 2",
+                (MemoDatabase._uid_prefix_like(uid),),
+            ).fetchall()
+            if len(candidates) == 1:
+                local_row = candidates[0]
+        return local_row
+
     def merge(self, entries: list[dict]) -> tuple[int, int, int, int]:
-        """Return (inserted, updated, skipped, shortcut_dropped)."""
+        """Return (inserted, updated, skipped, shortcut_dropped). Inserted and
+        updated rows are marked source='remote' — untrusted until reviewed
+        locally, so `koda x` prompts before executing them."""
         inserted = updated = skipped = shortcut_dropped = 0
         with self.db.connection() as conn:
-            for rm in sorted(
-                entries,
-                key=lambda m: (
-                    parse_memo_datetime(m.get("modified_at"))
-                    or parse_memo_datetime(m.get("created_at")),
-                    str(m.get("uid") or ""),
-                ),
-            ):
-                uid = rm.get("uid")
-                if not uid or not isinstance(uid, str):
+            for rm in sorted(entries, key=self._sort_key):
+                rec = self._normalize(rm)
+                if rec is None:
                     skipped += 1
                     continue
-                try:
-                    want_idx = int(rm["idx"])
-                except (KeyError, TypeError, ValueError):
-                    skipped += 1
-                    continue
-                content = rm.get("content") if rm.get("content") is not None else ""
-                tags = rm.get("tags") if rm.get("tags") is not None else ""
-                created_at = str(rm.get("created_at") or "").strip() or datetime.now().strftime(
-                    DATETIME_FMT
-                )
-                modified_at = str(rm.get("modified_at") or "").strip() or created_at
-                raw_sc = rm.get("shortcut")
-                sc = raw_sc if raw_sc is None or raw_sc == "" else str(raw_sc)
-
-                r_ts = parse_memo_datetime(modified_at) or parse_memo_datetime(created_at)
-                local_row = conn.execute(
-                    "SELECT id, uid, idx, content, tags, shortcut, created_at, modified_at "
-                    "FROM memos WHERE uid = ?",
-                    (uid,),
-                ).fetchone()
-                if local_row is None and len(uid) < UID_LENGTH:
-                    # Legacy payload: a pre-widening peer still emits 7-char
-                    # uids. Match them to the widened local uid by prefix so the
-                    # entry updates in place instead of duplicating. Only an
-                    # unambiguous single match is accepted.
-                    candidates = conn.execute(
-                        "SELECT id, uid, idx, content, tags, shortcut, created_at, modified_at "
-                        "FROM memos WHERE uid LIKE ? ESCAPE '\\' LIMIT 2",
-                        (MemoDatabase._uid_prefix_like(uid),),
-                    ).fetchall()
-                    if len(candidates) == 1:
-                        local_row = candidates[0]
+                uid = rec["uid"]
+                local_row = self._find_local(conn, uid)
                 if local_row is None:
-                    # uid is absent (local_row is None), idx and shortcut are
-                    # pre-resolved to free values, so this INSERT cannot violate
-                    # any UNIQUE constraint — no retry needed.
-                    new_idx = pick_idx(conn, want_idx)
-                    use_sc = pick_shortcut(conn, uid, sc)
-                    if use_sc is None and sc:
+                    # uid is absent, idx and shortcut are pre-resolved to free
+                    # values, so this INSERT cannot violate any UNIQUE
+                    # constraint — no retry needed.
+                    new_idx = pick_idx(conn, rec["want_idx"])
+                    use_sc = pick_shortcut(conn, uid, rec["sc"])
+                    if use_sc is None and rec["sc"]:
                         shortcut_dropped += 1
                     conn.execute(
                         "INSERT INTO memos "
-                        "(uid, idx, shortcut, content, tags, created_at, modified_at) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                        (uid, new_idx, use_sc, content, tags, created_at, modified_at),
+                        "(uid, idx, shortcut, content, tags, created_at, modified_at, source) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, 'remote')",
+                        (
+                            uid,
+                            new_idx,
+                            use_sc,
+                            rec["content"],
+                            rec["tags"],
+                            rec["created_at"],
+                            rec["modified_at"],
+                        ),
                     )
                     inserted += 1
                     continue
 
                 memo_id = local_row[0]
-                l_created = local_row[6]
-                l_modified = local_row[7]
-                l_ts = parse_memo_datetime(l_modified) or parse_memo_datetime(l_created)
-                if r_ts <= l_ts:
+                l_ts = parse_memo_datetime(local_row[7]) or parse_memo_datetime(local_row[6])
+                if rec["r_ts"] <= l_ts:
                     skipped += 1
                     continue
 
-                use_sc = pick_shortcut(conn, uid, sc)
-                if use_sc is None and sc:
+                use_sc = pick_shortcut(conn, uid, rec["sc"])
+                if use_sc is None and rec["sc"]:
                     shortcut_dropped += 1
-                self._apply_idx_for_row(conn, memo_id, want_idx)
+                self._apply_idx_for_row(conn, memo_id, rec["want_idx"])
                 conn.execute(
                     "UPDATE memos SET shortcut = ?, content = ?, tags = ?, "
-                    "created_at = ?, modified_at = ? WHERE id = ?",
-                    (use_sc, content, tags, created_at, modified_at, memo_id),
+                    "created_at = ?, modified_at = ?, source = 'remote' WHERE id = ?",
+                    (
+                        use_sc,
+                        rec["content"],
+                        rec["tags"],
+                        rec["created_at"],
+                        rec["modified_at"],
+                        memo_id,
+                    ),
                 )
                 updated += 1
         return inserted, updated, skipped, shortcut_dropped
+
+    def plan(self, entries: list[dict]) -> list[dict]:
+        """Read-only classification of a payload for `pull --dry-run`: a list of
+        {action, uid, idx, content} where action is insert/update/skip, without
+        mutating the database. Mirrors merge's insert/update/skip rule; idx
+        shown is the remote's preferred value (conflict resolution is applied
+        only by the real merge)."""
+        out: list[dict] = []
+        with self.db.connection() as conn:
+            for rm in sorted(entries, key=self._sort_key):
+                rec = self._normalize(rm)
+                if rec is None:
+                    out.append(
+                        {
+                            "action": "skip",
+                            "uid": str(rm.get("uid") or "?"),
+                            "idx": None,
+                            "content": "",
+                        }
+                    )
+                    continue
+                local_row = self._find_local(conn, rec["uid"])
+                if local_row is None:
+                    action = "insert"
+                else:
+                    l_ts = parse_memo_datetime(local_row[7]) or parse_memo_datetime(local_row[6])
+                    action = "update" if rec["r_ts"] > l_ts else "skip"
+                out.append(
+                    {
+                        "action": action,
+                        "uid": rec["uid"],
+                        "idx": rec["want_idx"],
+                        "content": rec["content"] or "",
+                    }
+                )
+        return out

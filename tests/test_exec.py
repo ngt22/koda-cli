@@ -67,3 +67,46 @@ def test_heredoc_body(tmp_path):
     result = _run_x(tmp_path, "cat <<EOF\nline A\nline B\nEOF")
     assert result.returncode == 0, result.stderr
     assert result.stdout.splitlines() == ["line A", "line B"]
+
+
+def _seed_remote(tmp_path, body):
+    db_path = tmp_path / "exec.db"
+    seed = MemoDatabase(backend="local", path=db_path)
+    seed.init_db()
+    seed.add_memo("rem00001", 1, None, body, "", "2026-01-01 00:00:00", "2026-01-01 00:00:00")
+    with seed.connection() as conn:
+        conn.execute("UPDATE memos SET source = 'remote' WHERE uid = ?", ("rem00001",))
+    return db_path
+
+
+def _run(tmp_path, db_path, *args):
+    return subprocess.run(
+        [sys.executable, "-c", "from koda.main import app; app()", "x", *args],
+        capture_output=True,
+        text=True,
+        stdin=subprocess.DEVNULL,
+        env=_base_env(tmp_path, db_path),
+    )
+
+
+def test_remote_entry_refuses_without_confirmation(tmp_path):
+    """A source=remote entry must not execute unattended (no TTY to confirm)."""
+    db_path = _seed_remote(tmp_path, "echo SHOULD_NOT_RUN")
+    result = _run(tmp_path, db_path, "1")
+    assert result.returncode != 0
+    assert "SHOULD_NOT_RUN" not in result.stdout
+
+
+def test_remote_entry_runs_with_force(tmp_path):
+    """-f skips the confirmation prompt for remote entries."""
+    db_path = _seed_remote(tmp_path, "echo FORCED_RUN")
+    result = _run(tmp_path, db_path, "1", "-f")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "FORCED_RUN"
+
+
+def test_local_entry_runs_without_prompt(tmp_path):
+    """A normal (local) entry executes with no confirmation, even without a TTY."""
+    result = _run_x(tmp_path, "echo LOCAL_OK")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "LOCAL_OK"
