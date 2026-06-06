@@ -29,7 +29,7 @@ from .config import (
 from .config import (
     COLUMN_DEFS,
     CONFIG_PATH,
-    DEFAULT_DB_PATH,
+    EXAMPLE_TEMPLATE,
     VALID_LIST_COLUMNS,
     VALID_SORT_COLUMNS,
     Config,
@@ -1316,31 +1316,7 @@ def config_edit_cmd() -> None:
     """Open the config file in $EDITOR."""
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     if not CONFIG_PATH.exists():
-        template = (
-            "# Koda configuration\n"
-            "# Uncomment and edit values to override defaults.\n\n"
-            "# [defaults]\n"
-            '# cmd = "raw"      # "raw" or "list"\n\n'
-            "# [list]\n"
-            "# per_page = 20\n"
-            "# rows = 1         # 0 = all lines\n"
-            "# truncate = 80    # 0 = no truncation\n"
-            '# sort_by = "idx"\n'
-            "# desc = false\n\n"
-            "# [db]\n"
-            f'# path = "{DEFAULT_DB_PATH}"\n'
-            '# backend = "local"   # "local" or "turso"\n\n'
-            "# [turso]\n"
-            '# url = "libsql://your-db.turso.io"   # or set KODA_TURSO_URL\n'
-            '# token = "your-auth-token"            # or set KODA_TURSO_TOKEN\n\n'
-            "# [git]\n"
-            '# sync_path = "/path/to/koda-sync-repo"    # clone root, or use KODA_GIT_SYNC_PATH\n'
-            '# payload_file = "koda-sync.jsonl"         # relative to sync_path (JSON Lines)\n'
-            '# sync_format = "jsonl"                     # or KODA_GIT_SYNC_FORMAT\n\n'
-            "# [exec]\n"
-            '# shell = "sh"\n'
-        )
-        CONFIG_PATH.write_text(template, encoding="utf-8")
+        CONFIG_PATH.write_text(EXAMPLE_TEMPLATE, encoding="utf-8")
     editor = os.environ.get("EDITOR", "vim")
     subprocess.call([editor, str(CONFIG_PATH)])
 
