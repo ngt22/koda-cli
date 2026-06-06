@@ -56,6 +56,33 @@ GIT_SYNC_FORMAT_JSONL = "jsonl"
 EXEC_SHELL_ALLOWLIST = ("sh", "bash", "zsh", "fish")
 
 
+# Commented-out scaffold written to a fresh config file by `koda config edit`.
+EXAMPLE_TEMPLATE = (
+    "# Koda configuration\n"
+    "# Uncomment and edit values to override defaults.\n\n"
+    "# [defaults]\n"
+    '# cmd = "raw"      # "raw" or "list"\n\n'
+    "# [list]\n"
+    "# per_page = 20\n"
+    "# rows = 1         # 0 = all lines\n"
+    "# truncate = 80    # 0 = no truncation\n"
+    '# sort_by = "idx"\n'
+    "# desc = false\n\n"
+    "# [db]\n"
+    f'# path = "{DEFAULT_DB_PATH}"\n'
+    '# backend = "local"   # "local" or "turso"\n\n'
+    "# [turso]\n"
+    '# url = "libsql://your-db.turso.io"   # or set KODA_TURSO_URL\n'
+    '# token = "your-auth-token"            # or set KODA_TURSO_TOKEN\n\n'
+    "# [git]\n"
+    '# sync_path = "/path/to/koda-sync-repo"    # clone root, or use KODA_GIT_SYNC_PATH\n'
+    '# payload_file = "koda-sync.jsonl"         # relative to sync_path (JSON Lines)\n'
+    '# sync_format = "jsonl"                     # or KODA_GIT_SYNC_FORMAT\n\n'
+    "# [exec]\n"
+    '# shell = "sh"\n'
+)
+
+
 def valid_exec_shell(v: Any) -> bool:
     """True if ``v`` names an allowlisted shell that resolves to an existing
     absolute executable. Guards `koda x` against arbitrary-binary redirection
