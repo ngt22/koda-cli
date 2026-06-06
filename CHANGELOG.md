@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   entry's uid / idx to stdout for pipelines.
 - `koda export [--out PATH]` writes all entries as JSON Lines to stdout or a
   file, and `koda import <file>` merges a JSONL file into the local database.
+- `koda diff [--file PATH]` shows a uid-level diff (local-only / remote-only /
+  changed) between the local database and the remote payload.
+- `koda backup --out PATH` writes a consistent single-file SQLite snapshot
+  (`VACUUM INTO`).
 
 ## [1.2.0] - 2026-06-06
 
