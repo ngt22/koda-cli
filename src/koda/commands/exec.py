@@ -5,7 +5,7 @@ import sys
 
 import typer
 
-from ..cli_utils import exit_error
+from ..cli_utils import ExitCode, confirm, exit_error
 from ..cmd_helpers.display import print_memo as _print_memo
 from ..cmd_helpers.interactive import (
     pick_candidates,
@@ -61,10 +61,20 @@ def exec_memo(
             "Examples: -V 'localhost,5432' -V 'name=prod' -V '\"hello world\",\"foo,bar\"'"
         ),
     ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        "-f",
+        help="Skip the confirmation prompt for entries synced from a remote (source=remote).",
+    ),
 ):
     """Execute the memo body as a shell command. Alias: `koda x`.
 
     When no argument is given, this command also accepts one ref from stdin.
+
+    Entries brought in by `koda pull` are marked source=remote and prompt for
+    confirmation before running, since a compromised sync remote could rewrite
+    their body. Editing an entry locally clears the flag; -f skips the prompt.
     """
     if ref is None:
         stdin_refs = _read_stdin_refs()
@@ -75,6 +85,12 @@ def exec_memo(
 
     init_db()
     row = resolve_ref(ref)
+    if row.source == "remote" and not force:
+        label = ref if ref is not None else f"[{row.idx}]"
+        if not confirm(
+            f"Entry {label} was synced from a remote and not reviewed locally. Execute anyway?"
+        ):
+            exit_error("Aborted.", code=ExitCode.CANCELLED, style="yellow")
     content = _apply_vars(row.content.strip() if row.content else "", vars)
     shell = get_config().exec_shell
     try:

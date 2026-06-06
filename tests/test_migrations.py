@@ -64,6 +64,36 @@ def test_up_migration_from_pre_versioning_schema(tmp_path):
     assert len(row.uid) == UID_LENGTH
 
 
+def test_source_column_added_and_defaults_local(tmp_path):
+    """Migration 0003 adds the source column; pre-existing rows default to
+    'local' (the user's own work)."""
+    old_path = tmp_path / "v2.db"
+    conn = sqlite3.connect(old_path)
+    conn.executescript(
+        """
+        CREATE TABLE memos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, uid TEXT UNIQUE, idx INTEGER UNIQUE,
+            shortcut TEXT, content TEXT, tags TEXT, created_at TIMESTAMP, modified_at TIMESTAMP
+        );
+        PRAGMA user_version = 2;
+        """
+    )
+    full = compute_uid("body", "2026-01-01 00:00:00")
+    conn.execute(
+        "INSERT INTO memos (uid, idx, content, tags, created_at, modified_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (full, 0, "body", "", "2026-01-01 00:00:00", "2026-01-01 00:00:00"),
+    )
+    conn.commit()
+    conn.close()
+
+    db = MemoDatabase(backend="local", path=old_path)
+    db.init_db()
+
+    assert "source" in _columns(db)
+    assert db.get_memo_by_uid(full).source == "local"
+
+
 def test_init_db_is_idempotent(tmp_path):
     db = MemoDatabase(backend="local", path=tmp_path / "idem.db")
     db.init_db()

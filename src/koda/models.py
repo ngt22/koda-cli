@@ -12,7 +12,12 @@ class MemoRow:
 
     Field order matches the canonical SELECT projection used across the
     database layer: id, uid, idx, content, tags, shortcut, created_at,
-    modified_at.
+    modified_at, source.
+
+    ``source`` is a local trust annotation ('local' = authored or reviewed on
+    this machine; 'remote' = brought in by a Git sync and not yet reviewed). It
+    is intentionally NOT part of the sync payload, so a peer cannot label its
+    own entries 'local' to dodge the exec confirmation.
     """
 
     id: int
@@ -23,12 +28,13 @@ class MemoRow:
     shortcut: str | None
     created_at: str | None
     modified_at: str | None = ""
+    source: str = "local"
 
     @classmethod
     def from_row(cls, row) -> Optional["MemoRow"]:
         if row is None:
             return None
-        assert len(row) == 8, f"expected 8 columns, got {len(row)}"
+        assert len(row) == 9, f"expected 9 columns, got {len(row)}"
         return cls(*row)
 
     def to_dict(self) -> dict[str, Any]:
@@ -42,4 +48,5 @@ class MemoRow:
             "shortcut": self.shortcut,
             "created_at": self.created_at,
             "modified_at": self.modified_at,
+            "source": self.source,
         }
