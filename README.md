@@ -1051,6 +1051,14 @@ uv run ruff format src tests  # auto-format
 Lint and format are configured under `[tool.ruff]` in `pyproject.toml`
 (line length 100; rule sets `E`, `F`, `I`, `UP`).
 
+Optionally install the [pre-commit](https://pre-commit.com) hooks so lint,
+format, and whitespace checks run automatically before each commit:
+
+```bash
+uvx pre-commit install        # set up the git hook (one time)
+uvx pre-commit run --all-files  # run all hooks on demand
+```
+
 ---
 
 ## License
