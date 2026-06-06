@@ -54,6 +54,9 @@ def _add_impl(
     text: list[str] | None = None,
     tag: list[str] | None = None,
     shortcut: str | None = None,
+    quiet: bool = False,
+    print_uid: bool = False,
+    print_idx: bool = False,
 ) -> None:
     shortcut = _validate_shortcut(shortcut)
     init_db()
@@ -100,8 +103,13 @@ def _add_impl(
     except _IntegrityErrors:
         exit_error(f"Shortcut {shortcut!r} is already in use.")
 
-    sc_str = f" sc=[bold green]{shortcut}[/bold green]" if shortcut else ""
-    console.print(f"[green]Saved [{new_idx}] ({uid}) tags: {formatted_tags}{sc_str}[/green]")
+    if print_uid:
+        sys.stdout.write(uid + "\n")
+    if print_idx:
+        sys.stdout.write(str(new_idx) + "\n")
+    if not quiet:
+        sc_str = f" sc=[bold green]{shortcut}[/bold green]" if shortcut else ""
+        console.print(f"[green]Saved [{new_idx}] ({uid}) tags: {formatted_tags}{sc_str}[/green]")
 
 
 @app.command()
@@ -115,9 +123,18 @@ def add(
     shortcut: str | None = typer.Option(
         None, "--shortcut", "-s", help="Short alias for this entry (e.g. 'deploy')."
     ),
+    quiet: bool = typer.Option(
+        False, "--quiet", "-q", help="Suppress the success message (for scripting)."
+    ),
+    print_uid: bool = typer.Option(
+        False, "--print-uid", help="Print the new entry's uid to stdout."
+    ),
+    print_idx: bool = typer.Option(
+        False, "--print-idx", help="Print the new entry's idx to stdout."
+    ),
 ):
     """Create an entry from arguments, stdin, or your editor. Alias: `koda a`."""
-    _add_impl(text, tag, shortcut)
+    _add_impl(text, tag, shortcut, quiet=quiet, print_uid=print_uid, print_idx=print_idx)
 
 
 @app.command(name="remove")
@@ -225,6 +242,7 @@ def edit(
     ref: str | None = typer.Argument(
         None, help="Entry index or shortcut to edit (default: latest)."
     ),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress the success message."),
 ):
     """Open an entry in $EDITOR (body plus tags/shortcut/metadata footer). Alias: `koda e`."""
     init_db()
@@ -278,13 +296,16 @@ def edit(
                 update_memo_full(memo_id, new_content, new_tags, new_shortcut, new_created_at)
             except _IntegrityErrors:
                 exit_error(f"Shortcut {new_shortcut!r} is already in use.")
-            console.print(f"[green]Entry [{idx}] updated.[/green]")
+            if not quiet:
+                console.print(f"[green]Entry [{idx}] updated.[/green]")
         else:
             new_content = "\n---\n".join(parts).strip() if parts else new_data.strip()
             update_memo_full(memo_id, new_content, tags, shortcut, created_at)
-            console.print(
-                "[yellow]No metadata footer found; content updated, metadata preserved.[/yellow]"
-            )
+            if not quiet:
+                console.print(
+                    "[yellow]No metadata footer found; "
+                    "content updated, metadata preserved.[/yellow]"
+                )
     finally:
         Path(temp_path).unlink(missing_ok=True)
 
@@ -597,6 +618,7 @@ def tag(
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Show what would change without modifying the database."
     ),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress the success message."),
 ):
     """Add or remove tags on one or more entries. Supports ranges (e.g. 2-5). Alias: `koda t`."""
     if not tags and not untag:
@@ -633,6 +655,8 @@ def tag(
             added_count += len(added)
             removed_count += len(removed)
 
+    if quiet:
+        return
     entry_word = "entry" if updated == 1 else "entries"
     verb = "Would update" if dry_run else "Updated"
     color = "cyan" if dry_run else "green"

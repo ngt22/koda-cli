@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead of erroring on an unexpected argument.
 - `--dry-run` on `compact`, `shift`, `move`, and `tag` previews changes
   without modifying the database.
+- `--quiet/-q` on `add`, `edit`, `tag`, `move`, and `swap` suppresses the
+  success message; `add --print-uid` / `add --print-idx` print the new
+  entry's uid / idx to stdout for pipelines.
 
 ## [1.2.0] - 2026-06-06
 
