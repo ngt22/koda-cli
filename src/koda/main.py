@@ -955,6 +955,8 @@ def tag(
     remove_list = parse_tag_args(untag)
 
     updated = 0
+    added_count = 0
+    removed_count = 0
     with get_db().connection() as conn:
         for idx in idx_list:
             row = conn.execute("SELECT id, tags FROM memos WHERE idx = ?", (idx,)).fetchone()
@@ -963,24 +965,26 @@ def tag(
                 continue
             row_id, current_tags = row
             current = [t for t in (current_tags or "").split(TAG_SEPARATOR) if t.strip()]
-            new_tags = [t for t in current if t not in remove_list]
-            new_tags = new_tags + [t for t in add_list if t not in new_tags]
+            removed = [t for t in current if t in remove_list]
+            kept = [t for t in current if t not in remove_list]
+            added = [t for t in add_list if t not in kept]
+            new_tags = kept + added
+            if new_tags == current:
+                continue
             conn.execute(
                 "UPDATE memos SET tags = ? WHERE id = ?",
                 (TAG_SEPARATOR.join(new_tags), row_id),
             )
             updated += 1
+            added_count += len(added)
+            removed_count += len(removed)
 
-    parts = []
-    if add_list:
-        parts.append(f"Added to {updated} entr{'y' if updated == 1 else 'ies'}")
-    if remove_list:
-        parts.append(
-            f"removed from {updated} entr{'y' if updated == 1 else 'ies'}"
-            if add_list
-            else f"Removed from {updated} entr{'y' if updated == 1 else 'ies'}"
-        )
-    console.print(f"[green]{'; '.join(parts)}.[/green]")
+    entry_word = "entry" if updated == 1 else "entries"
+    console.print(
+        f"[green]Updated {updated} {entry_word} "
+        f"(added {added_count} tag{'' if added_count == 1 else 's'}, "
+        f"removed {removed_count} tag{'' if removed_count == 1 else 's'}).[/green]"
+    )
 
 
 @app.command(name="move")
