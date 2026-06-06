@@ -4,6 +4,28 @@
 
 A **text store** for the terminal. Save any text — commands, paths, templates, notes — to SQLite and recall it instantly by index, shortcut, or fuzzy search. Saved entries can be executed as shell commands, making koda a **terminal launcher**. Sync via a private Git repository to share the same store across machines, giving you a **cross-machine clipboard** that works from any terminal. Built with Python, Typer, and Rich.
 
+## Why koda?
+
+- **One store for text *and* commands.** Snippet managers store commands; note tools store text. koda does both, then lets you `exec` any entry as a shell command — with `${KEY}` / `$1` variable substitution at call time.
+- **Recall is instant and scriptable.** Reach any entry by numeric index, a memorable shortcut, or fuzzy `pick` (fzf). `raw` emits body-only text for pipes and `$(...)`, and `--json` feeds `jq`.
+- **Your store follows you.** A private Git repo syncs the same entries to every machine — a cross-machine clipboard for the terminal.
+
+**Who it's for:** terminal-native developers, SREs, and DevOps folks who retype the same commands, paths, and templates across hosts.
+
+| | **koda** | pet | navi | nb | atuin |
+|---|:---:|:---:|:---:|:---:|:---:|
+| Primary purpose | text + command store | snippets | cheatsheets | notes/bookmarks | shell history |
+| Store arbitrary text | ✓ | ✓ | partial | ✓ | — |
+| Run entry as a command | ✓ | ✓ | ✓ | — | re-run history |
+| Fuzzy interactive pick | ✓ (fzf) | ✓ | ✓ (fzf) | partial | ✓ |
+| Variable substitution | ✓ (`${KEY}`/`$1`) | ✓ | ✓ | — | — |
+| Shortcut / index recall | ✓ | — | — | ✓ (ids) | — |
+| Cross-machine sync | ✓ (your Git repo) | ✓ (Gist/Git) | via files | ✓ (Git) | ✓ (server) |
+| Storage | SQLite | TOML | files | files/Git | SQLite |
+| JSON output | ✓ | — | — | partial | ✓ |
+
+Comparisons are best-effort and reflect each tool's primary focus, not an exhaustive feature audit.
+
 ## Features
 
 **Core**
