@@ -12,6 +12,9 @@ from ..runtime import console, get_db, init_db
 def move(
     from_idx: int = typer.Argument(..., help="Source display index."),
     to_idx: int = typer.Argument(..., help="Destination display index (must be empty)."),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Show what would change without modifying the database."
+    ),
 ):
     """Move entry at FROM to an unoccupied display position TO. Alias: `koda m`."""
     init_db()
@@ -27,6 +30,9 @@ def move(
                 f"or `koda shift {to_idx}` to make room first.[/dim]"
             )
             raise typer.Exit(code=1)
+        if dry_run:
+            console.print(f"[cyan]Would move {from_idx} → {to_idx}.[/cyan]")
+            return
         conn.execute("UPDATE memos SET idx = ? WHERE idx = ?", (to_idx, from_idx))
     console.print(f"[green]Moved {from_idx} → {to_idx}.[/green]")
 
@@ -36,6 +42,9 @@ def shift_cmd(
     start: int = typer.Argument(..., help="Shift entries at this index and above."),
     count: int = typer.Option(
         1, "--count", "-n", help="Positions to shift (negative = shift down)."
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Show what would change without modifying the database."
     ),
 ):
     """Shift all entries at START and above by COUNT positions. Alias: `koda h`."""
@@ -58,6 +67,15 @@ def shift_cmd(
                     f"Cannot shift down by {abs(count)}: "
                     f"entries exist in [{start + count}, {start - 1}]."
                 )
+        if dry_run:
+            affected = conn.execute(
+                "SELECT COUNT(*) FROM memos WHERE idx >= ?", (start,)
+            ).fetchone()[0]
+            console.print(
+                f"[cyan]Would shift {affected} entr{'y' if affected == 1 else 'ies'} "
+                f"from index {start} by {count:+d}.[/cyan]"
+            )
+            return
         # Two-step update to avoid UNIQUE constraint violations during bulk shift
         conn.execute(
             "UPDATE memos SET idx = idx + ? WHERE idx >= ?",
@@ -94,7 +112,11 @@ def swap(
 
 
 @app.command(name="compact")
-def compact_indices():
+def compact_indices(
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Show what would change without modifying the database."
+    ),
+):
     """Fill index gaps by reassigning idx to contiguous values from 0. Alias: `koda k`."""
     init_db()
     with get_db().connection() as conn:
@@ -106,6 +128,13 @@ def compact_indices():
         changed = sum(1 for new_idx, (_, old_idx) in enumerate(rows) if old_idx != new_idx)
         if changed == 0:
             console.print("[green]Indices are already contiguous from 0.[/green]")
+            return
+
+        if dry_run:
+            console.print(
+                f"[cyan]Would compact indices for {changed} "
+                f"entr{'y' if changed == 1 else 'ies'}.[/cyan]"
+            )
             return
 
         max_idx = max(idx for _, idx in rows)

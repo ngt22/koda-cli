@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--json` output for `list`, `show`, and `config` for scripting (jq-friendly).
 - `koda list <idx|shortcut>` is now shorthand for `koda show <idx|shortcut>`
   instead of erroring on an unexpected argument.
+- `--dry-run` on `compact`, `shift`, `move`, and `tag` previews changes
+  without modifying the database.
 
 ## [1.2.0] - 2026-06-06
 
