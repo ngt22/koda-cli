@@ -1,6 +1,5 @@
 """Memo CRUD and display commands: add, remove, copy, edit, list, show, raw, tag."""
 
-import hashlib
 import json
 import os
 import re
@@ -20,7 +19,7 @@ from ..cmd_helpers.parsing import parse_indices, parse_tag_args
 from ..config import COLUMN_DEFS, VALID_LIST_COLUMNS, VALID_SORT_COLUMNS
 from ..constants import DATETIME_FMT, TAG_SEPARATOR
 from ..db import IntegrityErrors as _IntegrityErrors
-from ..db import MemoDatabase
+from ..db import MemoDatabase, compute_uid
 from ..main import RESERVED_SHORTCUTS, app
 from ..runtime import (
     _read_stdin_refs,
@@ -35,8 +34,7 @@ from ..runtime import (
 
 
 def _generate_uid(content: str, created_at: str) -> str:
-    raw = f"{content}{created_at}".encode()
-    return hashlib.sha1(raw).hexdigest()[:7]
+    return compute_uid(content, created_at)
 
 
 def _validate_shortcut(shortcut: str | None) -> str | None:
