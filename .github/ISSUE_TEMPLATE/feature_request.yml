@@ -1,0 +1,31 @@
+name: Feature request
+description: Suggest a new command, flag, or behavior.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion! Issues may be written in Japanese or English.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: What are you trying to do that koda doesn't support today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: The command, flag, or behavior you'd like. Sketch the CLI usage if you can.
+      render: shell
+      placeholder: koda <new-command> --some-flag
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches or existing workarounds.
+    validations:
+      required: false

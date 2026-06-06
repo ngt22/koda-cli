@@ -1,0 +1,51 @@
+name: Bug report
+description: Report something that isn't working as expected.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug! Issues may be written in Japanese or English.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug and what you expected instead.
+      placeholder: Running `koda ...` produced ... but I expected ...
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: The exact commands you ran.
+      render: shell
+      placeholder: |
+        koda add "example"
+        koda list
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: koda version
+      description: Output of `koda --version`.
+      placeholder: "koda version: 1.2.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Database backend
+      options:
+        - local (sqlite)
+        - turso (libsql)
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: OS and Python version
+      placeholder: "Ubuntu 24.04, Python 3.12"
+    validations:
+      required: true
