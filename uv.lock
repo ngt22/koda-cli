@@ -177,6 +177,7 @@ version = "1.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "rich" },
+    { name = "tomli", marker = "python_full_version < '3.11'" },
     { name = "typer" },
 ]
 
@@ -196,6 +197,7 @@ dev = [
 requires-dist = [
     { name = "libsql-experimental", marker = "extra == 'turso'", specifier = ">=0.0.1" },
     { name = "rich", specifier = ">=13.7.1" },
+    { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2.0" },
     { name = "typer", specifier = ">=0.12.3" },
 ]
 provides-extras = ["turso"]
