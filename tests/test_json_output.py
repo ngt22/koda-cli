@@ -67,6 +67,19 @@ def test_config_json_is_hierarchical(wired_db, capsys):
     assert "per_page" in data["list"]
 
 
+def test_config_show_subcommand_matches_callback(wired_db, capsys):
+    """`config show` (explicit subcommand) produces the same JSON as bare `config`."""
+    config_cmd.config_show_cmd(json_output=True)
+    via_subcommand = capsys.readouterr().out
+
+    ctx = type("Ctx", (), {"invoked_subcommand": None})()
+    config_cmd.config_show(ctx, json_output=True)
+    via_callback = capsys.readouterr().out
+
+    assert via_subcommand == via_callback
+    assert json.loads(via_subcommand)["defaults"]["cmd"] == "raw"
+
+
 def test_config_json_masks_token(wired_db, capsys, monkeypatch):
     cfg = runtime.get_config()
     monkeypatch.setattr(cfg, "turso_token", "super-secret-token")

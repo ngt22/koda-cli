@@ -25,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `koda pick --multi/-m` for fzf multi-select: prints selected IDXs (pipe to
   `remove`/`tag`) or applies `--raw`/`--show` per selection. Extra fzf flags
   via the `KODA_FZF_OPTS` environment variable.
+- `koda config show` as an explicit subcommand, equivalent to bare
+  `koda config`.
 
 ## [1.2.0] - 2026-06-06
 
