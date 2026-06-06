@@ -129,12 +129,44 @@ class TestValidate:
         with pytest.raises(ValidationError):
             ConfigManager.validate("git.sync_format", "yaml")
 
-    @pytest.mark.parametrize("key", ["db.path", "turso.url", "turso.token", "git.sync_path"])
+    @pytest.mark.parametrize("key", ["turso.url", "turso.token", "git.sync_path"])
     def test_no_validator_passthrough(self, key):
         assert ConfigManager.validate(key, "anything") == "anything"
 
     def test_unknown_key_passthrough(self):
         assert ConfigManager.validate("unknown.key", "x") == "x"
+
+
+class TestDbPath:
+    def test_default_path_valid(self):
+        from koda.config import DEFAULT_DB_PATH
+
+        assert ConfigManager.validate("db.path", str(DEFAULT_DB_PATH)) == str(DEFAULT_DB_PATH)
+
+    def test_inside_data_dir_valid(self):
+        from koda.config import DEFAULT_DB_DIR
+
+        path = str(DEFAULT_DB_DIR / "sub" / "other.db")
+        assert ConfigManager.validate("db.path", path) == path
+
+    @pytest.mark.parametrize(
+        "path",
+        ["/home/victim/.ssh/authorized_keys", "/tmp/evil.db", "relative.db"],
+    )
+    def test_outside_data_dir_invalid(self, path, monkeypatch):
+        monkeypatch.delenv("KODA_DB_PATH_OVERRIDE", raising=False)
+        with pytest.raises(ValidationError):
+            ConfigManager.validate("db.path", path)
+
+    def test_override_env_allows_arbitrary_path(self, monkeypatch):
+        monkeypatch.setenv("KODA_DB_PATH_OVERRIDE", "1")
+        assert ConfigManager.validate("db.path", "/tmp/evil.db") == "/tmp/evil.db"
+
+    def test_xdg_data_home_root_valid(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("KODA_DB_PATH_OVERRIDE", raising=False)
+        monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+        path = str(tmp_path / "koda" / "koda.db")
+        assert ConfigManager.validate("db.path", path) == path
 
 
 class TestExecShell:

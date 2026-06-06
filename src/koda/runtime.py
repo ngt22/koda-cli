@@ -17,7 +17,7 @@ from rich.console import Console
 
 from .cli_utils import exit_error
 from .cmd_helpers.parsing import parse_var_items
-from .config import Config, ConfigManager, ValidationError
+from .config import Config, ConfigManager, ValidationError, db_path_allowed
 from .db import DatabaseError, MemoDatabase
 
 __app_name__ = "koda"
@@ -68,6 +68,15 @@ def _resolve_db() -> MemoDatabase:
     global _db
     if _db is None:
         cfg = get_config()
+        # db.path from a config file or KODA_DB_PATH env bypasses validate(),
+        # so re-check here before init_db can mkdir/create a file at an
+        # attacker-chosen location (e.g. ~/.ssh/authorized_keys).
+        if cfg.db_backend == "local" and not db_path_allowed(cfg.db_path):
+            exit_error(
+                f"Refusing to use db.path {cfg.db_path!r}: outside the koda data dir "
+                "(~/.local/share/koda or $XDG_DATA_HOME/koda). "
+                "Set KODA_DB_PATH_OVERRIDE=1 to allow another location."
+            )
         _db = MemoDatabase(
             backend=cfg.db_backend,
             path=Path(cfg.db_path).expanduser(),
