@@ -1,8 +1,29 @@
 # koda-cli
 
 [![CI](https://github.com/ngt22/koda-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/ngt22/koda-cli/actions/workflows/ci.yml)
+[![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue)](https://github.com/ngt22/koda-cli/blob/main/pyproject.toml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](https://github.com/ngt22/koda-cli/blob/main/LICENSE)
 
 A **text store** for the terminal. Save any text — commands, paths, templates, notes — to SQLite and recall it instantly by index, shortcut, or fuzzy search. Saved entries can be executed as shell commands, making koda a **terminal launcher**. Sync via a private Git repository to share the same store across machines, giving you a **cross-machine clipboard** that works from any terminal. Built with Python, Typer, and Rich.
+
+## Contents
+
+- [Why koda?](#why-koda)
+- [Features](#features)
+- [In action](#in-action)
+- [Quick reference](#quick-reference)
+- [Installation](#installation)
+- [Update](#update)
+- [Command reference](#command-reference)
+- [Options](#options)
+- [Recommended aliases](#recommended-aliases)
+- [Configuration](#configuration)
+- [Environment variables](#environment-variables)
+- [Turso (remote database)](#turso-remote-database)
+- [Git sync](#git-sync-multi-machine-sharing-via-github)
+- [Example uses](#example-uses)
+- [Development](#development)
+- [License](#license)
 
 ## Why koda?
 
