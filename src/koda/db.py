@@ -2,7 +2,7 @@
 
 import os
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -36,6 +36,44 @@ VALID_SORT_COLUMNS = {
 
 class DatabaseError(RuntimeError):
     """Backend configuration error (missing driver, missing URL, etc.)."""
+
+
+def _migration_0001_initial_schema(conn) -> None:
+    """Create the memos table, ensure the shortcut column and its index.
+
+    This is the schema that predates versioning, so every statement is
+    idempotent: applying it to an already-migrated database is a no-op,
+    while a fresh database gets the full current schema.
+    """
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS memos (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            uid         TEXT UNIQUE,
+            idx         INTEGER UNIQUE,
+            shortcut    TEXT,
+            content     TEXT,
+            tags        TEXT,
+            created_at  TIMESTAMP,
+            modified_at TIMESTAMP
+        )
+    """)
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(memos)").fetchall()}
+    if "shortcut" not in cols:
+        conn.execute("ALTER TABLE memos ADD COLUMN shortcut TEXT")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_memos_shortcut "
+        "ON memos(shortcut) WHERE shortcut IS NOT NULL"
+    )
+
+
+# Ordered list of schema migrations. Each entry N (0-based) advances the
+# database from PRAGMA user_version N to N+1. Append new migrations to the
+# end; never reorder or rewrite an existing one.
+_MIGRATIONS: list[Callable[[sqlite3.Connection], None]] = [
+    _migration_0001_initial_schema,
+]
+
+SCHEMA_VERSION = len(_MIGRATIONS)
 
 
 class MemoDatabase:
@@ -89,32 +127,29 @@ class MemoDatabase:
                 conn.close()
 
     def init_db(self) -> None:
-        """Create the memos table and required indexes if missing."""
+        """Bring the schema up to date by applying pending migrations."""
         if self.backend == "local" and self.path is not None:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             os.chmod(self.path.parent, 0o700)
         with self.connection() as conn:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS memos (
-                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                    uid         TEXT UNIQUE,
-                    idx         INTEGER UNIQUE,
-                    shortcut    TEXT,
-                    content     TEXT,
-                    tags        TEXT,
-                    created_at  TIMESTAMP,
-                    modified_at TIMESTAMP
-                )
-            """)
-            cols = {row[1] for row in conn.execute("PRAGMA table_info(memos)").fetchall()}
-            if "shortcut" not in cols:
-                conn.execute("ALTER TABLE memos ADD COLUMN shortcut TEXT")
-            conn.execute(
-                "CREATE UNIQUE INDEX IF NOT EXISTS idx_memos_shortcut "
-                "ON memos(shortcut) WHERE shortcut IS NOT NULL"
-            )
+            self._apply_migrations(conn)
         if self.backend == "local" and self.path is not None:
             os.chmod(self.path, 0o600)
+
+    @staticmethod
+    def _apply_migrations(conn) -> None:
+        """Run any migrations newer than the DB's PRAGMA user_version.
+
+        user_version starts at 0 (the default for databases created before
+        versioning existed, and for brand-new ones). Migration N takes the
+        schema from version N to N+1; we run them in order and bump
+        user_version after each so a crash mid-upgrade resumes cleanly.
+        """
+        current = conn.execute("PRAGMA user_version").fetchone()[0]
+        for version in range(current, len(_MIGRATIONS)):
+            _MIGRATIONS[version](conn)
+            # PRAGMA does not accept bound parameters; version is a trusted int.
+            conn.execute(f"PRAGMA user_version = {version + 1}")
 
     @staticmethod
     def next_idx(conn) -> int:
