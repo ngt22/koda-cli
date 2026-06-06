@@ -1,6 +1,6 @@
 """Tests for MemoMerger.merge: insert / update / skip / conflict paths."""
 
-from koda.git_sync import MemoMerger
+from koda.git_sync import MemoMerger, pick_idx, pick_shortcut
 
 
 def entry(
@@ -107,3 +107,57 @@ def test_batch_mixed_outcomes(db):
     assert inserted == 2
     assert updated == 1
     assert skipped == 0
+
+
+def test_two_new_entries_claim_same_idx(db):
+    """Both remote entries want idx 0; the second must be relocated, not retried."""
+    inserted, _, _, dropped = MemoMerger(db).merge(
+        [entry("uid0001", 0, content="first"), entry("uid0002", 0, content="second")]
+    )
+    assert (inserted, dropped) == (2, 0)
+    idxs = sorted(r.idx for r in db.get_memos(limit=None))
+    assert len(set(idxs)) == 2  # no UNIQUE(idx) collision
+
+
+def test_insert_with_both_idx_and_shortcut_conflict(db):
+    """A new entry colliding on BOTH idx and shortcut: idx relocated, shortcut dropped."""
+    db.add_memo("uid0001", 0, "ab", "owner", "", "2026-01-01 00:00:00", "2026-01-01 00:00:00")
+    inserted, _, _, dropped = MemoMerger(db).merge(
+        [entry("uid0002", 0, content="wants-both", shortcut="ab")]
+    )
+    assert (inserted, dropped) == (1, 1)
+    new_row = db.get_memo_by_uid("uid0002")
+    assert new_row.idx != 0
+    assert new_row.shortcut is None
+
+
+class TestPickIdx:
+    def test_returns_preferred_when_free(self, db):
+        with db.connection() as conn:
+            assert pick_idx(conn, 5) == 5
+
+    def test_returns_next_when_occupied(self, db):
+        db.add_memo("uid0001", 5, None, "x", "", "2026-01-01 00:00:00", "2026-01-01 00:00:00")
+        with db.connection() as conn:
+            assert pick_idx(conn, 5) == 6
+
+
+class TestPickShortcut:
+    def test_none_and_empty_pass_through(self, db):
+        with db.connection() as conn:
+            assert pick_shortcut(conn, "uid0001", None) is None
+            assert pick_shortcut(conn, "uid0001", "") == ""
+
+    def test_unclaimed_is_usable(self, db):
+        with db.connection() as conn:
+            assert pick_shortcut(conn, "uid0001", "ab") == "ab"
+
+    def test_claimed_by_other_uid_is_dropped(self, db):
+        db.add_memo("uid0001", 0, "ab", "owner", "", "2026-01-01 00:00:00", "2026-01-01 00:00:00")
+        with db.connection() as conn:
+            assert pick_shortcut(conn, "uid0002", "ab") is None
+
+    def test_owned_by_same_uid_is_kept(self, db):
+        db.add_memo("uid0001", 0, "ab", "owner", "", "2026-01-01 00:00:00", "2026-01-01 00:00:00")
+        with db.connection() as conn:
+            assert pick_shortcut(conn, "uid0001", "ab") == "ab"

@@ -11,7 +11,7 @@ from rich.console import Console
 from .cli_utils import exit_error
 from .config import GIT_SYNC_FORMAT_JSONL, Config
 from .constants import DATETIME_FMT
-from .db import IntegrityErrors, MemoDatabase
+from .db import MemoDatabase
 
 console = Console()
 
@@ -305,29 +305,35 @@ class GitSyncRepo:
 # ── Merge into local DB ─────────────────────────────────────────────────────
 
 
+def pick_idx(conn, preferred: int) -> int:
+    """Return an idx free for a brand-new row: ``preferred`` if unoccupied,
+    otherwise the next free idx. The memos.idx UNIQUE constraint is therefore
+    satisfied without needing an INSERT retry."""
+    if conn.execute("SELECT 1 FROM memos WHERE idx = ?", (preferred,)).fetchone() is None:
+        return preferred
+    return MemoDatabase.next_idx(conn)
+
+
+def pick_shortcut(conn, uid: str, shortcut: str | None) -> str | None:
+    """Return ``shortcut`` if it is usable for ``uid`` (empty/None, unclaimed,
+    or already owned by this uid), else None. Keeps the partial-unique shortcut
+    index satisfied without needing an INSERT retry."""
+    if shortcut is None or shortcut == "":
+        return shortcut
+    existing = conn.execute("SELECT uid FROM memos WHERE shortcut = ?", (shortcut,)).fetchone()
+    if existing is None:
+        return shortcut
+    (existing_uid,) = existing
+    if existing_uid == uid:
+        return shortcut
+    return None
+
+
 class MemoMerger:
     """Merge remote JSONL entries into the local memos table by uid + modified_at."""
 
     def __init__(self, db: MemoDatabase) -> None:
         self.db = db
-
-    @staticmethod
-    def _shortcut_usable(conn, uid: str, shortcut: str | None) -> str | None:
-        if shortcut is None or shortcut == "":
-            return shortcut
-        existing = conn.execute("SELECT uid FROM memos WHERE shortcut = ?", (shortcut,)).fetchone()
-        if existing is None:
-            return shortcut
-        (existing_uid,) = existing
-        if existing_uid == uid:
-            return shortcut
-        return None
-
-    @staticmethod
-    def _pick_idx(conn, preferred: int) -> int:
-        if conn.execute("SELECT 1 FROM memos WHERE idx = ?", (preferred,)).fetchone() is None:
-            return preferred
-        return MemoDatabase.next_idx(conn)
 
     @staticmethod
     def _apply_idx_for_row(conn, memo_id: int, preferred: int) -> None:
@@ -380,38 +386,20 @@ class MemoMerger:
                     (uid,),
                 ).fetchone()
                 if local_row is None:
-                    pick_idx = self._pick_idx(conn, want_idx)
-                    use_sc = self._shortcut_usable(conn, uid, sc)
+                    # uid is absent (local_row is None), idx and shortcut are
+                    # pre-resolved to free values, so this INSERT cannot violate
+                    # any UNIQUE constraint — no retry needed.
+                    new_idx = pick_idx(conn, want_idx)
+                    use_sc = pick_shortcut(conn, uid, sc)
                     if use_sc is None and sc:
                         shortcut_dropped += 1
-                    try:
-                        conn.execute(
-                            "INSERT INTO memos "
-                            "(uid, idx, shortcut, content, tags, created_at, modified_at) "
-                            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                            (uid, pick_idx, use_sc, content, tags, created_at, modified_at),
-                        )
-                        inserted += 1
-                    except IntegrityErrors:
-                        pick_idx = MemoDatabase.next_idx(conn)
-                        try:
-                            conn.execute(
-                                "INSERT INTO memos "
-                                "(uid, idx, shortcut, content, tags, created_at, modified_at) "
-                                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                                (uid, pick_idx, use_sc, content, tags, created_at, modified_at),
-                            )
-                            inserted += 1
-                        except IntegrityErrors:
-                            conn.execute(
-                                "INSERT INTO memos "
-                                "(uid, idx, shortcut, content, tags, created_at, modified_at) "
-                                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                                (uid, pick_idx, None, content, tags, created_at, modified_at),
-                            )
-                            inserted += 1
-                            if use_sc:
-                                shortcut_dropped += 1
+                    conn.execute(
+                        "INSERT INTO memos "
+                        "(uid, idx, shortcut, content, tags, created_at, modified_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (uid, new_idx, use_sc, content, tags, created_at, modified_at),
+                    )
+                    inserted += 1
                     continue
 
                 memo_id = local_row[0]
@@ -422,7 +410,7 @@ class MemoMerger:
                     skipped += 1
                     continue
 
-                use_sc = self._shortcut_usable(conn, uid, sc)
+                use_sc = pick_shortcut(conn, uid, sc)
                 if use_sc is None and sc:
                     shortcut_dropped += 1
                 self._apply_idx_for_row(conn, memo_id, want_idx)
