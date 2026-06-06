@@ -12,6 +12,24 @@ from ..main import app
 from ..runtime import console, get_config, get_db, init_db
 
 
+def _obtain_remote_payload(local_payload_path: Path | None) -> bytes:
+    """Return payload bytes from a local --file or, failing that, the Git clone."""
+    git_sync.require_jsonl_format(get_config())
+    if local_payload_path is not None:
+        if not local_payload_path.is_file():
+            exit_error(f"--file does not exist: {local_payload_path}")
+        return local_payload_path.read_bytes()
+    git_sync.require_git_cli()
+    sync_root = git_sync.resolve_sync_root(get_config())
+    repo = git_sync.GitSyncRepo(sync_root)
+    repo.ensure_worktree()
+    payload_path = git_sync.resolve_payload_path(get_config(), sync_root)
+    repo.pull_rebase_if_remote()
+    if not payload_path.is_file():
+        exit_error(f"Payload file missing after pull: {payload_path}")
+    return payload_path.read_bytes()
+
+
 def _merge_payload(data: bytes) -> None:
     """Load a JSONL payload and merge it into the local DB, printing a summary."""
     try:
@@ -102,22 +120,7 @@ def pull(
     Merge key is uid + modified_at. Alias: `koda pull`.
     """
     init_db()
-    git_sync.require_jsonl_format(get_config())
-    if local_payload_path is not None:
-        if not local_payload_path.is_file():
-            exit_error(f"--file does not exist: {local_payload_path}")
-        data = local_payload_path.read_bytes()
-    else:
-        git_sync.require_git_cli()
-        sync_root = git_sync.resolve_sync_root(get_config())
-        repo = git_sync.GitSyncRepo(sync_root)
-        repo.ensure_worktree()
-        payload_path = git_sync.resolve_payload_path(get_config(), sync_root)
-        repo.pull_rebase_if_remote()
-        if not payload_path.is_file():
-            exit_error(f"Payload file missing after pull: {payload_path}")
-        data = payload_path.read_bytes()
-
+    data = _obtain_remote_payload(local_payload_path)
     _merge_payload(data)
     console.print("[green]Pull complete.[/green]")
 
@@ -155,3 +158,71 @@ def import_memos(
     data = file.read_bytes()
     _merge_payload(data)
     console.print("[green]Import complete.[/green]")
+
+
+@app.command()
+def diff(
+    local_payload_path: Path | None = typer.Option(
+        None, "--file", help="Diff against this JSONL file instead of the Git clone."
+    ),
+):
+    """Show a uid-level diff between the local database and the remote payload.
+
+    Reports entries that are local-only, remote-only, or present in both but
+    changed (different content, tags, shortcut, or modified_at).
+    """
+    init_db()
+    data = _obtain_remote_payload(local_payload_path)
+    try:
+        remote_rows = git_sync.GitSyncPayload.load(data)
+    except Exception as e:
+        exit_error(f"Invalid sync payload: {e}")
+
+    remote = {r["uid"]: r for r in remote_rows}
+    local = {r.uid: r for r in get_db().get_memos(limit=None)}
+
+    local_only = sorted(set(local) - set(remote))
+    remote_only = sorted(set(remote) - set(local))
+    changed = []
+    for uid in set(local) & set(remote):
+        lrow, rrow = local[uid], remote[uid]
+        if (
+            (lrow.content or "") != (rrow.get("content") or "")
+            or (lrow.tags or "") != (rrow.get("tags") or "")
+            or (lrow.shortcut or None) != (rrow.get("shortcut") or None)
+            or (lrow.modified_at or "") != (rrow.get("modified_at") or "")
+        ):
+            changed.append(uid)
+    changed.sort()
+
+    if not (local_only or remote_only or changed):
+        console.print("[green]No differences — local and remote are in sync.[/green]")
+        return
+
+    for uid in local_only:
+        console.print(f"[green]+ local-only[/green]  {uid}  [{local[uid].idx}]")
+    for uid in remote_only:
+        console.print(f"[red]- remote-only[/red] {uid}")
+    for uid in changed:
+        console.print(f"[yellow]~ changed[/yellow]     {uid}  [{local[uid].idx}]")
+    console.print(
+        f"[dim]{len(local_only)} local-only, {len(remote_only)} remote-only, "
+        f"{len(changed)} changed[/dim]"
+    )
+
+
+@app.command()
+def backup(
+    out: Path = typer.Option(
+        ..., "--out", "-o", help="Destination file for the SQLite snapshot (must not exist)."
+    ),
+):
+    """Write a consistent single-file snapshot of the local database (VACUUM INTO)."""
+    init_db()
+    if get_config().db_backend != "local":
+        exit_error("backup is only supported for the local sqlite backend.")
+    if out.exists():
+        exit_error(f"Destination already exists: {out}")
+    with get_db().connection() as conn:
+        conn.execute("VACUUM INTO ?", (str(out),))
+    console.print(f"[green]Backup written to {out}.[/green]")
