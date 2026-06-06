@@ -83,6 +83,20 @@ EXAMPLE_TEMPLATE = (
 )
 
 
+def valid_payload_file(v: Any) -> bool:
+    """True if ``v`` is a safe relative payload path. Rejects empty values,
+    absolute paths, ``..`` traversal, and any path with a ``.git`` component.
+    The last guard stops a tampered config from steering `koda push` into
+    ``.git/hooks/post-merge`` (or any other repo-internal file), which would
+    let a written payload execute on the next git operation."""
+    if not isinstance(v, str) or len(v.strip()) == 0:
+        return False
+    parts = Path(v).parts
+    if Path(v).is_absolute() or ".." in parts or ".git" in parts:
+        return False
+    return True
+
+
 def valid_exec_shell(v: Any) -> bool:
     """True if ``v`` names an allowlisted shell that resolves to an existing
     absolute executable. Guards `koda x` against arbitrary-binary redirection
@@ -180,13 +194,8 @@ _FIELD_SPECS: dict[str, FieldSpec] = {
     "git.sync_path": FieldSpec(str),
     "git.payload_file": FieldSpec(
         str,
-        lambda v: (
-            isinstance(v, str)
-            and len(v.strip()) > 0
-            and not Path(v).is_absolute()
-            and ".." not in Path(v).parts
-        ),
-        "must be a non-empty path relative to git.sync_path without '..' components",
+        valid_payload_file,
+        "must be a non-empty path relative to git.sync_path without '..' or '.git' components",
     ),
     "git.sync_format": FieldSpec(
         str,
