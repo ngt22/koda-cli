@@ -594,6 +594,9 @@ def tag(
     indices: list[str] = typer.Argument(..., help="Entry indices or ranges (e.g. 1 3 5-8)."),
     tags: list[str] | None = typer.Option(None, "--tag", "-t", help="Tag(s) to add."),
     untag: list[str] | None = typer.Option(None, "--untag", "-T", help="Tag(s) to remove."),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Show what would change without modifying the database."
+    ),
 ):
     """Add or remove tags on one or more entries. Supports ranges (e.g. 2-5). Alias: `koda t`."""
     if not tags and not untag:
@@ -621,17 +624,20 @@ def tag(
             new_tags = kept + added
             if new_tags == current:
                 continue
-            conn.execute(
-                "UPDATE memos SET tags = ? WHERE id = ?",
-                (TAG_SEPARATOR.join(new_tags), row_id),
-            )
+            if not dry_run:
+                conn.execute(
+                    "UPDATE memos SET tags = ? WHERE id = ?",
+                    (TAG_SEPARATOR.join(new_tags), row_id),
+                )
             updated += 1
             added_count += len(added)
             removed_count += len(removed)
 
     entry_word = "entry" if updated == 1 else "entries"
+    verb = "Would update" if dry_run else "Updated"
+    color = "cyan" if dry_run else "green"
     console.print(
-        f"[green]Updated {updated} {entry_word} "
+        f"[{color}]{verb} {updated} {entry_word} "
         f"(added {added_count} tag{'' if added_count == 1 else 's'}, "
-        f"removed {removed_count} tag{'' if removed_count == 1 else 's'}).[/green]"
+        f"removed {removed_count} tag{'' if removed_count == 1 else 's'}).[/{color}]"
     )
