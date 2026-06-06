@@ -1,5 +1,7 @@
 # koda-cli
 
+[![CI](https://github.com/ngt22/koda-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/ngt22/koda-cli/actions/workflows/ci.yml)
+
 A **text store** for the terminal. Save any text — commands, paths, templates, notes — to SQLite and recall it instantly by index, shortcut, or fuzzy search. Saved entries can be executed as shell commands, making koda a **terminal launcher**. Sync via a private Git repository to share the same store across machines, giving you a **cross-machine clipboard** that works from any terminal. Built with Python, Typer, and Rich.
 
 ## Features

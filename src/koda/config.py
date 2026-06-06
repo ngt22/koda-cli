@@ -3,13 +3,18 @@
 import json
 import os
 import shutil
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Any
 
-import tomllib
+if sys.version_info >= (3, 11):
+    import tomllib
+else:  # Python 3.10 has no stdlib tomllib; fall back to the tomli backport.
+    import tomli as tomllib
+
 from rich.console import Console
 
 console = Console()
