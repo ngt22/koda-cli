@@ -26,6 +26,5 @@ class MemoRow:
     def from_row(cls, row) -> Optional["MemoRow"]:
         if row is None:
             return None
-        if len(row) == 7:
-            return cls(*row, modified_at="")
+        assert len(row) == 8, f"expected 8 columns, got {len(row)}"
         return cls(*row)
