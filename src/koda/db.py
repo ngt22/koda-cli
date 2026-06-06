@@ -181,19 +181,24 @@ class MemoDatabase:
         tag=None,
         exclude_tag=None,
         shortcuts_only=False,
-        limit=20,
-        offset=0,
+        limit: int | None = None,
+        offset: int = 0,
         sort_by="idx",
         desc=False,
     ) -> list[MemoRow]:
+        """Return filtered, ordered memos. ``limit=None`` returns every match
+        (formerly ``get_memos_all``); a non-None ``limit`` paginates via
+        ``LIMIT/OFFSET``."""
         order_column = sort_by if sort_by in VALID_SORT_COLUMNS else "idx"
         order_direction = "DESC" if desc else "ASC"
         where_sql, params = self._filters(query, tag, exclude_tag, shortcuts_only)
         sql = (
             f"SELECT {self._MEMO_COLUMNS} FROM memos"
-            f"{where_sql} ORDER BY {order_column} {order_direction}, id ASC LIMIT ? OFFSET ?"
+            f"{where_sql} ORDER BY {order_column} {order_direction}, id ASC"
         )
-        params = params + (limit, offset)
+        if limit is not None:
+            sql += " LIMIT ? OFFSET ?"
+            params = params + (limit, offset)
         with self.connection() as conn:
             return [MemoRow.from_row(r) for r in conn.execute(sql, params).fetchall()]
 
@@ -202,25 +207,6 @@ class MemoDatabase:
         sql = f"SELECT COUNT(*), MAX(idx) FROM memos{where_sql}"
         with self.connection() as conn:
             return conn.execute(sql, params).fetchone()
-
-    def get_memos_all(
-        self,
-        query=None,
-        tag=None,
-        exclude_tag=None,
-        shortcuts_only=False,
-        sort_by="idx",
-        desc=False,
-    ) -> list[MemoRow]:
-        order_column = sort_by if sort_by in VALID_SORT_COLUMNS else "idx"
-        order_direction = "DESC" if desc else "ASC"
-        where_sql, params = self._filters(query, tag, exclude_tag, shortcuts_only)
-        sql = (
-            f"SELECT {self._MEMO_COLUMNS} FROM memos"
-            f"{where_sql} ORDER BY {order_column} {order_direction}, id ASC"
-        )
-        with self.connection() as conn:
-            return [MemoRow.from_row(r) for r in conn.execute(sql, params).fetchall()]
 
     def get_latest_entry(self) -> MemoRow | None:
         with self.connection() as conn:

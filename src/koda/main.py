@@ -458,7 +458,7 @@ def rm(
                 else:
                     target_rows.append(row)
         else:
-            target_rows = get_db().get_memos_all(query=query, tag=tag, sort_by="idx")
+            target_rows = get_db().get_memos(query=query, tag=tag, sort_by="idx")
 
         if not target_rows:
             console.print("[yellow]No matching entries.[/yellow]")
