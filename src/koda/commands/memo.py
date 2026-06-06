@@ -440,6 +440,10 @@ def _list_memos_impl(
 
 @app.command(name="list")
 def list_memos(
+    ref: str | None = typer.Argument(
+        None,
+        help="If given, show that single entry (index or shortcut) instead of the table.",
+    ),
     query: str | None = typer.Option(None, "--query", "-q", help="Substring match on memo body."),
     tag: str | None = typer.Option(None, "--tag", "-t", help="Substring match on tags."),
     exclude_tag: str | None = typer.Option(
@@ -493,7 +497,13 @@ def list_memos(
         False, "--json", help="Output all matching entries as a JSON array (ignores paging)."
     ),
 ):
-    """Show entries as a table with paging and sortable columns. Alias: `koda l`."""
+    """Show entries as a table with paging and sortable columns. Alias: `koda l`.
+
+    `koda list <idx|shortcut>` is shorthand for `koda show <idx|shortcut>`.
+    """
+    if ref is not None:
+        show(ref, json_output=json_output)
+        return
     if json_output:
         _emit_list_json(query, tag, exclude_tag, shortcuts_only, sort_by, desc)
         return
