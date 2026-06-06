@@ -54,10 +54,7 @@ def test_dump_is_sorted_by_uid(db):
 
 
 def test_load_dedup_keeps_last_line():
-    data = (
-        b'{"uid":"uid0001","idx":0,"content":"old"}\n'
-        b'{"uid":"uid0001","idx":0,"content":"new"}\n'
-    )
+    data = b'{"uid":"uid0001","idx":0,"content":"old"}\n{"uid":"uid0001","idx":0,"content":"new"}\n'
     loaded = GitSyncPayload.load(data)
     assert len(loaded) == 1
     assert loaded[0]["content"] == "new"

@@ -77,7 +77,7 @@ class TestStripInlineComment:
         assert _strip_inline_comment('echo "a # b"') == 'echo "a # b"'
 
     def test_escaped_quote_handled(self):
-        assert _strip_inline_comment(r'echo \# literal') == r'echo \# literal'
+        assert _strip_inline_comment(r"echo \# literal") == r"echo \# literal"
 
     def test_no_comment(self):
         assert _strip_inline_comment("plain text") == "plain text"

@@ -1,41 +1,43 @@
-import typer
-import sys
 import hashlib
-from typer.core import TyperGroup
 import os
-import subprocess
-import tempfile
 import re
+import subprocess
+import sys
+import tempfile
 from datetime import datetime
 from importlib.metadata import version
 from pathlib import Path
-from typing import Optional, List
+
+import typer
 from rich.console import Console
 from rich.table import Table
+from typer.core import TyperGroup
 
-from .db import MemoDatabase, DatabaseError, IntegrityErrors as _IntegrityErrors
+from . import git_sync
 from .cli_utils import confirm, exit_error
-from .config import (
-    ALL_KEYS as _ALL_KEYS,
-    COLUMN_DEFS,
-    CONFIG_PATH,
-    ConfigManager,
-    DEFAULT_DB_PATH,
-    GIT_SYNC_FORMAT_JSONL,
-    VALID_LIST_COLUMNS,
-    VALID_SORT_COLUMNS,
-    ValidationError,
-)
 from .cmd_helpers.display import print_memo as _print_memo
-from .cmd_helpers.metadata import first_footer_index, last_footer_segment
-from .cmd_helpers.parsing import parse_indices, parse_tag_args, parse_var_items
 from .cmd_helpers.interactive import (
     pick_candidates,
     pick_with_fzf,
     resolve_pick_action,
 )
-from . import git_sync
+from .cmd_helpers.metadata import first_footer_index, last_footer_segment
+from .cmd_helpers.parsing import parse_indices, parse_tag_args, parse_var_items
+from .config import (
+    ALL_KEYS as _ALL_KEYS,
+)
+from .config import (
+    COLUMN_DEFS,
+    CONFIG_PATH,
+    DEFAULT_DB_PATH,
+    VALID_LIST_COLUMNS,
+    VALID_SORT_COLUMNS,
+    ConfigManager,
+    ValidationError,
+)
 from .constants import DATETIME_FMT, IDX_TEMP_OFFSET, TAG_SEPARATOR
+from .db import DatabaseError, MemoDatabase
+from .db import IntegrityErrors as _IntegrityErrors
 
 __app_name__ = "koda"
 __version__ = version("koda-cli")
@@ -98,11 +100,12 @@ config, _config_sources = _config_manager.load()
 DB_PATH = Path(config.db_path).expanduser()
 
 
-def _validate_list_columns(columns: List[str], source: str) -> None:
+def _validate_list_columns(columns: list[str], source: str) -> None:
     try:
         ConfigManager.validate("list.columns", columns)
     except ValidationError:
         exit_error(f"Invalid {source}: {ConfigManager.error_message('list.columns')}")
+
 
 db = MemoDatabase(
     backend=config.db_backend,
@@ -134,7 +137,7 @@ def init_db():
         exit_error(f"Database Error: {e}")
 
 
-def resolve_ref(ref: Optional[str]):
+def resolve_ref(ref: str | None):
     """Return (id, uid, idx, content, tags, shortcut, created_at) or exit.
 
     ref=None → latest; digit string → idx lookup; other string → shortcut lookup.
@@ -155,25 +158,25 @@ def resolve_ref(ref: Optional[str]):
     return row
 
 
-def _validate_shortcut(shortcut: Optional[str]) -> Optional[str]:
+def _validate_shortcut(shortcut: str | None) -> str | None:
     if shortcut and len(shortcut) == 1 and shortcut in RESERVED_SHORTCUTS:
         exit_error(f"Shortcut {shortcut!r} is reserved as a 1-letter subcommand alias.")
     return shortcut
 
 
-def _apply_vars(content: str, vars: Optional[List[str]]) -> str:
+def _apply_vars(content: str, vars: list[str] | None) -> str:
     if not vars:
         return content
     pos_index = 1
     for var_spec in vars:
         stripped = var_spec.strip()
-        m = re.match(r'^(\w+)=(.*)', stripped, re.DOTALL)
+        m = re.match(r"^(\w+)=(.*)", stripped, re.DOTALL)
         if m:
             key, value = m.group(1), m.group(2)
             content = content.replace(f"${{{key}}}", value)
         else:
             for item in parse_var_items(stripped):
-                content = re.sub(rf'\${pos_index}(?!\d)', item.replace('\\', '\\\\'), content)
+                content = re.sub(rf"\${pos_index}(?!\d)", item.replace("\\", "\\\\"), content)
                 pos_index += 1
     return content
 
@@ -228,7 +231,7 @@ def _strip_raw_inline_comments(content: str) -> str:
     return "".join(stripped_lines)
 
 
-def emit_raw(ref: Optional[str], vars: Optional[List[str]] = None) -> None:
+def emit_raw(ref: str | None, vars: list[str] | None = None) -> None:
     init_db()
     row = resolve_ref(ref)
     content = _apply_vars(row.content if row.content is not None else "", vars)
@@ -240,7 +243,7 @@ def emit_raw(ref: Optional[str], vars: Optional[List[str]] = None) -> None:
     sys.stdout.write(content)
 
 
-def _read_stdin_refs() -> List[str]:
+def _read_stdin_refs() -> list[str]:
     """Read whitespace-separated entry refs from stdin (non-interactive only)."""
     if sys.stdin.isatty():
         return []
@@ -248,6 +251,7 @@ def _read_stdin_refs() -> List[str]:
     if not data:
         return []
     return [part for part in data.split() if part]
+
 
 def _run_pick_action(action: str, ref: str) -> None:
     if action == "raw":
@@ -270,7 +274,7 @@ def _run_pick_action(action: str, ref: str) -> None:
 @app.callback(invoke_without_command=True)
 def main(
     ctx: typer.Context,
-    version: Optional[bool] = typer.Option(
+    version: bool | None = typer.Option(
         None,
         "--version",
         "-v",
@@ -294,15 +298,15 @@ def main(
             emit_raw(None)
 
 
-def update_memo_full(memo_id: int, content: str, tags: str, shortcut: Optional[str], created_at: str):
+def update_memo_full(memo_id: int, content: str, tags: str, shortcut: str | None, created_at: str):
     now = datetime.now().strftime(DATETIME_FMT)
     db.update_memo(memo_id, content, tags, shortcut, created_at, now)
 
 
 def _add_impl(
-    text: Optional[List[str]] = None,
-    tag: Optional[List[str]] = None,
-    shortcut: Optional[str] = None,
+    text: list[str] | None = None,
+    tag: list[str] | None = None,
+    shortcut: str | None = None,
 ) -> None:
     shortcut = _validate_shortcut(shortcut)
     init_db()
@@ -318,12 +322,12 @@ def _add_impl(
     elif not sys.stdin.isatty():
         content = sys.stdin.read().strip()
     else:
-        editor = os.environ.get('EDITOR', 'vim')
-        with tempfile.NamedTemporaryFile(suffix=".tmp", mode='w+', delete=False) as tf:
+        editor = os.environ.get("EDITOR", "vim")
+        with tempfile.NamedTemporaryFile(suffix=".tmp", mode="w+", delete=False) as tf:
             temp_path = tf.name
         try:
             subprocess.call([editor, temp_path])
-            with open(temp_path, 'r') as f:
+            with open(temp_path) as f:
                 content = f.read().strip()
         finally:
             Path(temp_path).unlink(missing_ok=True)
@@ -331,7 +335,7 @@ def _add_impl(
     if not content:
         exit_error("Aborted: Empty content.", style="yellow")
 
-    content = content.encode('utf-8', 'surrogateescape').decode('utf-8', 'ignore')
+    content = content.encode("utf-8", "surrogateescape").decode("utf-8", "ignore")
 
     formatted_tags = TAG_SEPARATOR.join(dict.fromkeys(parse_tag_args(tag)))
 
@@ -341,8 +345,10 @@ def _add_impl(
         with db.connection() as conn:
             new_idx = MemoDatabase.next_idx(conn)
             conn.execute(
-                "INSERT INTO memos (uid, idx, shortcut, content, tags, created_at, modified_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (uid, new_idx, shortcut or None, content, formatted_tags, now, now)
+                "INSERT INTO memos "
+                "(uid, idx, shortcut, content, tags, created_at, modified_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (uid, new_idx, shortcut or None, content, formatted_tags, now, now),
             )
     except _IntegrityErrors:
         exit_error(f"Shortcut {shortcut!r} is already in use.")
@@ -353,13 +359,13 @@ def _add_impl(
 
 @app.command()
 def add(
-    text: Optional[List[str]] = typer.Argument(
+    text: list[str] | None = typer.Argument(
         None, help="Text to save (optional if using stdin or $EDITOR)."
     ),
-    tag: Optional[List[str]] = typer.Option(
+    tag: list[str] | None = typer.Option(
         None, "--tag", "-t", help="Comma-separated tag(s); repeat -t for more."
     ),
-    shortcut: Optional[str] = typer.Option(
+    shortcut: str | None = typer.Option(
         None, "--shortcut", "-s", help="Short alias for this entry (e.g. 'deploy')."
     ),
 ):
@@ -369,28 +375,32 @@ def add(
 
 @app.command(name="remove")
 def rm(
-    indices: Optional[List[str]] = typer.Argument(
+    indices: list[str] | None = typer.Argument(
         None, help="Entry indices, ranges (e.g. 1 3 5-8), or a single shortcut. Default: latest."
     ),
-    tag: Optional[str] = typer.Option(
+    tag: str | None = typer.Option(
         None, "--tag", "-t", help="Delete entries whose tags match this substring."
     ),
-    query: Optional[str] = typer.Option(
+    query: str | None = typer.Option(
         None, "--query", "-q", help="Delete entries whose body matches this substring."
     ),
-    all_entries: bool = typer.Option(
-        False, "--all", help="Delete ALL entries (requires -f)."
-    ),
-    force: bool = typer.Option(
-        False, "--force", "-f", help="Delete without prompting."
-    ),
+    all_entries: bool = typer.Option(False, "--all", help="Delete ALL entries (requires -f)."),
+    force: bool = typer.Option(False, "--force", "-f", help="Delete without prompting."),
 ):
-    """Delete entries. Defaults to latest; supports ranges, -t, -q, and --all for batch. Alias: `koda d`."""
+    """Delete entries. Defaults to latest; supports ranges, -t, -q, and --all for batch.
+
+    Alias: `koda d`.
+    """
     if all_entries and not force:
         exit_error("--all requires -f/--force.")
 
     init_db()
-    is_batch = bool(tag or query or all_entries or (indices and (len(indices) > 1 or re.search(r'\d-\d', indices[0]))))
+    is_batch = bool(
+        tag
+        or query
+        or all_entries
+        or (indices and (len(indices) > 1 or re.search(r"\d-\d", indices[0])))
+    )
 
     if is_batch:
         if indices:
@@ -443,7 +453,7 @@ def rm(
 
 @app.command(name="copy")
 def copy(
-    ref: Optional[str] = typer.Argument(
+    ref: str | None = typer.Argument(
         None, help="Source entry index or shortcut (default: latest)."
     ),
 ):
@@ -455,15 +465,17 @@ def copy(
     with db.connection() as conn:
         new_idx = MemoDatabase.next_idx(conn)
         conn.execute(
-            "INSERT INTO memos (uid, idx, shortcut, content, tags, created_at, modified_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (new_uid, new_idx, None, row.content, row.tags, now, now)
+            "INSERT INTO memos "
+            "(uid, idx, shortcut, content, tags, created_at, modified_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (new_uid, new_idx, None, row.content, row.tags, now, now),
         )
     console.print(f"[green]Copied [{row.idx}] → [{new_idx}] ({new_uid}).[/green]")
 
 
 @app.command()
 def edit(
-    ref: Optional[str] = typer.Argument(
+    ref: str | None = typer.Argument(
         None, help="Entry index or shortcut to edit (default: latest)."
     ),
 ):
@@ -472,13 +484,19 @@ def edit(
     row = resolve_ref(ref)
     memo_id = row.id
     content, tags, shortcut, created_at, idx = (
-        row.content, row.tags, row.shortcut, row.created_at, row.idx,
+        row.content,
+        row.tags,
+        row.shortcut,
+        row.created_at,
+        row.idx,
     )
 
     sc_line = f"shortcut: {shortcut}" if shortcut else "shortcut: "
-    template = f"{content}\n\n---\n# Metadata\ntags: {tags}\n{sc_line}\ncreated_at: {created_at}\n---"
+    template = (
+        f"{content}\n\n---\n# Metadata\ntags: {tags}\n{sc_line}\ncreated_at: {created_at}\n---"
+    )
 
-    editor = os.environ.get('EDITOR', 'vim')
+    editor = os.environ.get("EDITOR", "vim")
     with tempfile.NamedTemporaryFile(
         suffix=".tmp", mode="w+", delete=False, encoding="utf-8"
     ) as tf:
@@ -487,10 +505,10 @@ def edit(
 
     try:
         subprocess.call([editor, temp_path])
-        with open(temp_path, 'r') as f:
+        with open(temp_path) as f:
             new_data = f.read()
 
-        parts = re.split(r'\n---+\s*\n', new_data)
+        parts = re.split(r"\n---+\s*\n", new_data)
         while parts and not parts[-1].strip():
             parts.pop()
 
@@ -525,17 +543,17 @@ def edit(
 
 
 def _list_memos_impl(
-    query: Optional[str] = None,
-    tag: Optional[str] = None,
-    exclude_tag: Optional[str] = None,
+    query: str | None = None,
+    tag: str | None = None,
+    exclude_tag: str | None = None,
     shortcuts_only: bool = False,
-    per_page: Optional[int] = None,
+    per_page: int | None = None,
     page: int = 1,
-    sort_by: Optional[str] = None,
-    desc: Optional[bool] = None,
-    rows: Optional[str] = None,
-    truncate: Optional[int] = None,
-    columns: Optional[List[str]] = None,
+    sort_by: str | None = None,
+    desc: bool | None = None,
+    rows: str | None = None,
+    truncate: int | None = None,
+    columns: list[str] | None = None,
 ) -> None:
     init_db()
 
@@ -562,7 +580,7 @@ def _list_memos_impl(
         valid = ", ".join(sorted(VALID_SORT_COLUMNS))
         exit_error(f"Invalid --sort-by '{sort_by}'. Use one of: {valid}.")
 
-    rows_value: Optional[int]
+    rows_value: int | None
     try:
         parsed_rows = int(rows)
         if parsed_rows < 0:
@@ -645,42 +663,50 @@ def _list_memos_impl(
 
 @app.command(name="list")
 def list_memos(
-    query: Optional[str] = typer.Option(
-        None, "--query", "-q", help="Substring match on memo body."
-    ),
-    tag: Optional[str] = typer.Option(
-        None, "--tag", "-t", help="Substring match on tags."
-    ),
-    exclude_tag: Optional[str] = typer.Option(
-        None, "--exclude-tag", "-T",
+    query: str | None = typer.Option(None, "--query", "-q", help="Substring match on memo body."),
+    tag: str | None = typer.Option(None, "--tag", "-t", help="Substring match on tags."),
+    exclude_tag: str | None = typer.Option(
+        None,
+        "--exclude-tag",
+        "-T",
         help="Exclude entries whose tags include this substring.",
     ),
     shortcuts_only: bool = typer.Option(
         False, "--shortcuts", "-S", help="Show only entries that have a shortcut."
     ),
-    per_page: Optional[int] = typer.Option(
+    per_page: int | None = typer.Option(
         None, "--per-page", "-n", help="Entries per page. [config: list.per_page]"
     ),
-    page: int = typer.Option(
-        1, "--page", "-p", min=1, help="1-based page number to display."
+    page: int = typer.Option(1, "--page", "-p", min=1, help="1-based page number to display."),
+    sort_by: str | None = typer.Option(
+        None,
+        "--sort-by",
+        "-s",
+        case_sensitive=False,
+        help=(
+            "Sort column: id, idx, uid, tags, content, created_at, modified_at, shortcut. "
+            "[config: list.sort_by]"
+        ),
     ),
-    sort_by: Optional[str] = typer.Option(
-        None, "--sort-by", "-s", case_sensitive=False,
-        help="Sort column: id, idx, uid, tags, content, created_at, modified_at, shortcut. [config: list.sort_by]",
+    desc: bool | None = typer.Option(
+        None,
+        "--desc/--asc",
+        help="Sort order. [config: list.desc]",
     ),
-    desc: Optional[bool] = typer.Option(
-        None, "--desc/--asc", help="Sort order. [config: list.desc]",
-    ),
-    rows: Optional[str] = typer.Option(
-        None, "--rows", "-r",
+    rows: str | None = typer.Option(
+        None,
+        "--rows",
+        "-r",
         help="Content preview lines per entry (0 = all lines). [config: list.rows]",
     ),
-    truncate: Optional[int] = typer.Option(
-        None, "--truncate",
+    truncate: int | None = typer.Option(
+        None,
+        "--truncate",
         help="Max characters per content line (0 = no truncation). [config: list.truncate]",
     ),
-    columns: Optional[str] = typer.Option(
-        None, "--columns",
+    columns: str | None = typer.Option(
+        None,
+        "--columns",
         help=(
             "Comma-separated columns to display. idx is required. "
             f"Available: {', '.join(VALID_LIST_COLUMNS)}. [config: list.columns]"
@@ -688,46 +714,55 @@ def list_memos(
     ),
 ):
     """Show entries as a table with paging and sortable columns. Alias: `koda l`."""
-    parsed_columns: Optional[List[str]] = None
+    parsed_columns: list[str] | None = None
     if columns is not None:
         parsed_columns = [c.strip() for c in columns.split(",") if c.strip()]
         _validate_list_columns(parsed_columns, "--columns")
-    _list_memos_impl(query, tag, exclude_tag, shortcuts_only, per_page, page, sort_by, desc, rows, truncate, parsed_columns)
+    _list_memos_impl(
+        query,
+        tag,
+        exclude_tag,
+        shortcuts_only,
+        per_page,
+        page,
+        sort_by,
+        desc,
+        rows,
+        truncate,
+        parsed_columns,
+    )
 
 
 @app.command()
 def pick(
-    query: Optional[str] = typer.Option(
-        None, "--query", "-q", help="Substring match on memo body."
-    ),
-    tag: Optional[str] = typer.Option(
-        None, "--tag", "-t", help="Substring match on tags."
-    ),
-    exclude_tag: Optional[str] = typer.Option(
+    query: str | None = typer.Option(None, "--query", "-q", help="Substring match on memo body."),
+    tag: str | None = typer.Option(None, "--tag", "-t", help="Substring match on tags."),
+    exclude_tag: str | None = typer.Option(
         None, "--exclude-tag", "-T", help="Exclude entries whose tags include this substring."
     ),
     shortcuts_only: bool = typer.Option(
         False, "--shortcuts", "-S", help="Show only entries that have a shortcut."
     ),
-    sort_by: Optional[str] = typer.Option(
-        None, "--sort-by", case_sensitive=False,
-        help="Sort column: id, idx, uid, tags, content, created_at, modified_at, shortcut. [config: list.sort_by]",
+    sort_by: str | None = typer.Option(
+        None,
+        "--sort-by",
+        case_sensitive=False,
+        help=(
+            "Sort column: id, idx, uid, tags, content, created_at, modified_at, shortcut. "
+            "[config: list.sort_by]"
+        ),
     ),
-    desc: Optional[bool] = typer.Option(
-        None, "--desc/--asc", help="Sort order. [config: list.desc]",
+    desc: bool | None = typer.Option(
+        None,
+        "--desc/--asc",
+        help="Sort order. [config: list.desc]",
     ),
     print_id: bool = typer.Option(
         False, "--print-id", "-p", help="Print selected IDX and exit without running a command."
     ),
-    edit_mode: bool = typer.Option(
-        False, "--edit", "-e", help="Open selected entry in editor."
-    ),
-    exec_mode: bool = typer.Option(
-        False, "--exec", "-x", help="Execute selected entry."
-    ),
-    raw_mode: bool = typer.Option(
-        False, "--raw", "-r", help="Print selected entry body."
-    ),
+    edit_mode: bool = typer.Option(False, "--edit", "-e", help="Open selected entry in editor."),
+    exec_mode: bool = typer.Option(False, "--exec", "-x", help="Execute selected entry."),
+    raw_mode: bool = typer.Option(False, "--raw", "-r", help="Print selected entry body."),
     show_mode: bool = typer.Option(
         False, "--show", "-s", help="Show selected entry with metadata."
     ),
@@ -736,8 +771,10 @@ def pick(
     if print_id and (edit_mode or exec_mode or raw_mode or show_mode):
         exit_error("--print-id/-p cannot be combined with action flags.")
 
-    action: Optional[str] = None if print_id else resolve_pick_action(
-        config, edit_mode, exec_mode, raw_mode, show_mode, print_id
+    action: str | None = (
+        None
+        if print_id
+        else resolve_pick_action(config, edit_mode, exec_mode, raw_mode, show_mode, print_id)
     )
 
     init_db()
@@ -758,11 +795,8 @@ def pick(
 
 @app.command()
 def show(
-    ref: Optional[str] = typer.Argument(
-        None, help="Entry index or shortcut (default: latest)."
-    ),
+    ref: str | None = typer.Argument(None, help="Entry index or shortcut (default: latest)."),
 ):
-
     """Print one entry with index, uid, tags, and timestamps (Rich formatted). Alias: `koda s`.
 
     When no argument is given, this command also accepts one ref from stdin.
@@ -781,24 +815,28 @@ def show(
 
 @app.command()
 def raw(
-    entry_refs: Optional[List[str]] = typer.Argument(
+    entry_refs: list[str] | None = typer.Argument(
         None,
-        help="Entry index(es) or shortcut(s) (default: latest). Body only, for pipes and shell substitution.",
+        help=(
+            "Entry index(es) or shortcut(s) (default: latest). "
+            "Body only, for pipes and shell substitution."
+        ),
     ),
-    vars: Optional[List[str]] = typer.Option(
-        None, "--var", "-V",
+    vars: list[str] | None = typer.Option(
+        None,
+        "--var",
+        "-V",
         help=(
             "Variable substitution. Named: KEY=VALUE → replaces ${KEY}. "
             "Positional: VALUE → replaces $1,$2,... in order. "
             'Comma-separate multiple values; use "..." to include spaces or commas. '
-            'Examples: -V \'localhost,5432\' -V \'name=prod\' -V \'"hello world","foo,bar"\''
+            "Examples: -V 'localhost,5432' -V 'name=prod' -V '\"hello world\",\"foo,bar\"'"
         ),
     ),
 ):
+    """Print memo body to stdout only (plain text, no Rich). Same as bare `koda <idx>`.
 
-    """Print memo body to stdout only (plain text, no Rich). Same as bare `koda <idx>`. Alias: `koda r`.
-
-    When no argument is given, refs can also be passed from stdin.
+    Alias: `koda r`. When no argument is given, refs can also be passed from stdin.
     """
     refs = entry_refs
     if not refs:
@@ -806,7 +844,6 @@ def raw(
         refs = stdin_refs or None
 
     if not refs:
-
         emit_raw(None, vars)
     else:
         for ref in refs:
@@ -815,20 +852,21 @@ def raw(
 
 @app.command(name="exec")
 def exec_memo(
-    ref: Optional[str] = typer.Argument(
+    ref: str | None = typer.Argument(
         None, help="Entry index or shortcut to execute (default: latest)."
     ),
-    vars: Optional[List[str]] = typer.Option(
-        None, "--var", "-V",
+    vars: list[str] | None = typer.Option(
+        None,
+        "--var",
+        "-V",
         help=(
             "Variable substitution. Named: KEY=VALUE → replaces ${KEY}. "
             "Positional: VALUE → replaces $1,$2,... in order. "
             'Comma-separate multiple values; use "..." to include spaces or commas. '
-            'Examples: -V \'localhost,5432\' -V \'name=prod\' -V \'"hello world","foo,bar"\''
+            "Examples: -V 'localhost,5432' -V 'name=prod' -V '\"hello world\",\"foo,bar\"'"
         ),
     ),
 ):
-
     """Execute the memo body as a shell command. Alias: `koda x`.
 
     When no argument is given, this command also accepts one ref from stdin.
@@ -856,9 +894,9 @@ def exec_memo(
 
 @app.command()
 def tag(
-    indices: List[str] = typer.Argument(..., help="Entry indices or ranges (e.g. 1 3 5-8)."),
-    tags: Optional[List[str]] = typer.Option(None, "--tag", "-t", help="Tag(s) to add."),
-    untag: Optional[List[str]] = typer.Option(None, "--untag", "-T", help="Tag(s) to remove."),
+    indices: list[str] = typer.Argument(..., help="Entry indices or ranges (e.g. 1 3 5-8)."),
+    tags: list[str] | None = typer.Option(None, "--tag", "-t", help="Tag(s) to add."),
+    untag: list[str] | None = typer.Option(None, "--untag", "-T", help="Tag(s) to remove."),
 ):
     """Add or remove tags on one or more entries. Supports ranges (e.g. 2-5). Alias: `koda t`."""
     if not tags and not untag:
@@ -890,10 +928,12 @@ def tag(
     if add_list:
         parts.append(f"Added to {updated} entr{'y' if updated == 1 else 'ies'}")
     if remove_list:
-        parts.append(f"removed from {updated} entr{'y' if updated == 1 else 'ies'}" if add_list
-                     else f"Removed from {updated} entr{'y' if updated == 1 else 'ies'}")
+        parts.append(
+            f"removed from {updated} entr{'y' if updated == 1 else 'ies'}"
+            if add_list
+            else f"Removed from {updated} entr{'y' if updated == 1 else 'ies'}"
+        )
     console.print(f"[green]{'; '.join(parts)}.[/green]")
-
 
 
 @app.command(name="move")
@@ -921,11 +961,14 @@ def move(
 
 @app.command()
 def push(
-    payload_file: Optional[Path] = typer.Option(
+    payload_file: Path | None = typer.Option(
         None, "--file", help="Use this JSONL file instead of exporting the local database."
     ),
 ):
-    """Write memo export (JSON Lines, uid-sorted) into the Git clone, commit, and push. Alias: `koda push`."""
+    """Write memo export (JSON Lines, uid-sorted) into the Git clone, commit, and push.
+
+    Alias: `koda push`.
+    """
     init_db()
     git_sync.require_jsonl_format(config)
     git_sync.require_git_cli()
@@ -978,11 +1021,14 @@ def push(
 
 @app.command()
 def pull(
-    local_payload_path: Optional[Path] = typer.Option(
+    local_payload_path: Path | None = typer.Option(
         None, "--file", help="Import from this JSONL file (skip git pull in the clone)."
     ),
 ):
-    """Pull memo JSONL from the Git clone (--file skips git); merge into local DB (uid + modified_at). Alias: `koda pull`."""
+    """Pull memo JSONL from the Git clone (--file skips git); merge into local DB.
+
+    Merge key is uid + modified_at. Alias: `koda pull`.
+    """
     init_db()
     git_sync.require_jsonl_format(config)
     if local_payload_path is not None:
@@ -1006,7 +1052,11 @@ def pull(
         exit_error(f"Invalid sync payload: {e}")
 
     ins, upd, skp, dsc = git_sync.MemoMerger(db).merge(rows)
-    tail = f", [yellow]{dsc}[/yellow] shortcut(s) dropped (conflicts with local shortcuts)" if dsc else ""
+    tail = (
+        f", [yellow]{dsc}[/yellow] shortcut(s) dropped (conflicts with local shortcuts)"
+        if dsc
+        else ""
+    )
     console.print(
         f"merged remote memos: [cyan]{ins}[/cyan] inserted, [cyan]{upd}[/cyan] updated, "
         f"[dim]{skp}[/dim] skipped (older or invalid entries){tail}."
@@ -1017,7 +1067,9 @@ def pull(
 @app.command(name="shift")
 def shift_cmd(
     start: int = typer.Argument(..., help="Shift entries at this index and above."),
-    count: int = typer.Option(1, "--count", "-n", help="Positions to shift (negative = shift down)."),
+    count: int = typer.Option(
+        1, "--count", "-n", help="Positions to shift (negative = shift down)."
+    ),
 ):
     """Shift all entries at START and above by COUNT positions. Alias: `koda h`."""
     init_db()
@@ -1041,7 +1093,8 @@ def shift_cmd(
                 )
         # Two-step update to avoid UNIQUE constraint violations during bulk shift
         conn.execute(
-            "UPDATE memos SET idx = idx + ? WHERE idx >= ?", (IDX_TEMP_OFFSET, start),
+            "UPDATE memos SET idx = idx + ? WHERE idx >= ?",
+            (IDX_TEMP_OFFSET, start),
         )
         conn.execute(
             "UPDATE memos SET idx = idx - ? + ? WHERE idx >= ?",
@@ -1123,8 +1176,8 @@ def config_show(ctx: typer.Context) -> None:
     key_width = max(len(k) for k in _ALL_KEYS)
     src_labels = {
         "default": "[dim]default[/dim]",
-        "file":    "[green]file[/green]",
-        "env":     "[cyan]env[/cyan]",
+        "file": "[green]file[/green]",
+        "env": "[cyan]env[/cyan]",
     }
     for dotkey in _ALL_KEYS:
         val = ConfigManager.get(config, dotkey)
@@ -1140,9 +1193,7 @@ def config_get(
 ) -> None:
     """Print a single config value (plain text, for scripting)."""
     if key not in _ALL_KEYS:
-        exit_error(
-            f"Unknown key: {key!r}. Valid keys: {', '.join(sorted(_ALL_KEYS))}"
-        )
+        exit_error(f"Unknown key: {key!r}. Valid keys: {', '.join(sorted(_ALL_KEYS))}")
     sys.stdout.write(str(ConfigManager.get(config, key)) + "\n")
 
 
@@ -1153,9 +1204,7 @@ def config_set_cmd(
 ) -> None:
     """Write a setting to the config file."""
     if key not in _ALL_KEYS:
-        exit_error(
-            f"Unknown key: {key!r}. Valid keys: {', '.join(sorted(_ALL_KEYS))}"
-        )
+        exit_error(f"Unknown key: {key!r}. Valid keys: {', '.join(sorted(_ALL_KEYS))}")
     try:
         coerced = ConfigManager.coerce(key, value)
         ConfigManager.validate(key, coerced)
@@ -1179,9 +1228,7 @@ def config_unset(
 ) -> None:
     """Remove a key from the config file (reverts to default)."""
     if key not in _ALL_KEYS:
-        exit_error(
-            f"Unknown key: {key!r}. Valid keys: {', '.join(sorted(_ALL_KEYS))}"
-        )
+        exit_error(f"Unknown key: {key!r}. Valid keys: {', '.join(sorted(_ALL_KEYS))}")
     sec, subkey = key.split(".", 1)
     try:
         file_data = _config_manager.read_raw()

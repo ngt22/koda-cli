@@ -1037,6 +1037,20 @@ koda x llm -V "Summarize the last git commit"
 
 ---
 
+## Development
+
+```bash
+uv sync                       # editable install of the project + dev tools
+uv run pytest                 # run the test suite
+uv run ruff check src tests   # lint
+uv run ruff format src tests  # auto-format
+```
+
+Lint and format are configured under `[tool.ruff]` in `pyproject.toml`
+(line length 100; rule sets `E`, `F`, `I`, `UP`).
+
+---
+
 ## License
 
 MIT (c) 2026 ngt22

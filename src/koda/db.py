@@ -2,15 +2,15 @@
 
 import os
 import sqlite3
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator, List, Optional
 
 from .models import MemoRow
 
-
 try:
     import libsql_experimental as _libsql
+
     LIBSQL_AVAILABLE = True
     try:
         IntegrityErrors: tuple = (sqlite3.IntegrityError, _libsql.IntegrityError)
@@ -23,8 +23,14 @@ except ImportError:
 
 
 VALID_SORT_COLUMNS = {
-    "id", "idx", "uid", "tags", "content",
-    "created_at", "modified_at", "shortcut",
+    "id",
+    "idx",
+    "uid",
+    "tags",
+    "content",
+    "created_at",
+    "modified_at",
+    "shortcut",
 }
 
 
@@ -38,7 +44,7 @@ class MemoDatabase:
     def __init__(
         self,
         backend: str = "local",
-        path: Optional[Path] = None,
+        path: Path | None = None,
         turso_url: str = "",
         turso_token: str = "",
     ) -> None:
@@ -52,8 +58,7 @@ class MemoDatabase:
         if self.backend == "turso":
             if not LIBSQL_AVAILABLE:
                 raise DatabaseError(
-                    "libsql-experimental is not installed. "
-                    "Run: pip install libsql-experimental"
+                    "libsql-experimental is not installed. Run: pip install libsql-experimental"
                 )
             if not self.turso_url:
                 raise DatabaseError(
@@ -145,7 +150,7 @@ class MemoDatabase:
         offset=0,
         sort_by="idx",
         desc=False,
-    ) -> List[MemoRow]:
+    ) -> list[MemoRow]:
         order_column = sort_by if sort_by in VALID_SORT_COLUMNS else "idx"
         order_direction = "DESC" if desc else "ASC"
         where_sql, params = self._filters(query, tag, exclude_tag, shortcuts_only)
@@ -171,7 +176,7 @@ class MemoDatabase:
         shortcuts_only=False,
         sort_by="idx",
         desc=False,
-    ) -> List[MemoRow]:
+    ) -> list[MemoRow]:
         order_column = sort_by if sort_by in VALID_SORT_COLUMNS else "idx"
         order_direction = "DESC" if desc else "ASC"
         where_sql, params = self._filters(query, tag, exclude_tag, shortcuts_only)
@@ -182,15 +187,14 @@ class MemoDatabase:
         with self.connection() as conn:
             return [MemoRow.from_row(r) for r in conn.execute(sql, params).fetchall()]
 
-    def get_latest_entry(self) -> Optional[MemoRow]:
+    def get_latest_entry(self) -> MemoRow | None:
         with self.connection() as conn:
             row = conn.execute(
-                f"SELECT {self._MEMO_COLUMNS} FROM memos "
-                "ORDER BY created_at DESC, id DESC LIMIT 1"
+                f"SELECT {self._MEMO_COLUMNS} FROM memos ORDER BY created_at DESC, id DESC LIMIT 1"
             ).fetchone()
         return MemoRow.from_row(row)
 
-    def get_memo_by_idx(self, idx: int) -> Optional[MemoRow]:
+    def get_memo_by_idx(self, idx: int) -> MemoRow | None:
         with self.connection() as conn:
             row = conn.execute(
                 f"SELECT {self._MEMO_COLUMNS} FROM memos WHERE idx = ?",
@@ -198,7 +202,7 @@ class MemoDatabase:
             ).fetchone()
         return MemoRow.from_row(row)
 
-    def get_memo_by_shortcut(self, shortcut: str) -> Optional[MemoRow]:
+    def get_memo_by_shortcut(self, shortcut: str) -> MemoRow | None:
         with self.connection() as conn:
             row = conn.execute(
                 f"SELECT {self._MEMO_COLUMNS} FROM memos WHERE shortcut = ?",
@@ -206,7 +210,7 @@ class MemoDatabase:
             ).fetchone()
         return MemoRow.from_row(row)
 
-    def get_memo_by_uid(self, uid: str) -> Optional[MemoRow]:
+    def get_memo_by_uid(self, uid: str) -> MemoRow | None:
         with self.connection() as conn:
             row = conn.execute(
                 f"SELECT {self._MEMO_COLUMNS} FROM memos WHERE uid = ?",
@@ -218,7 +222,7 @@ class MemoDatabase:
         self,
         uid: str,
         idx: int,
-        shortcut: Optional[str],
+        shortcut: str | None,
         content: str,
         tags: str,
         created_at: str,
@@ -236,7 +240,7 @@ class MemoDatabase:
         memo_id: int,
         content: str,
         tags: str,
-        shortcut: Optional[str],
+        shortcut: str | None,
         created_at: str,
         modified_at: str,
     ) -> None:

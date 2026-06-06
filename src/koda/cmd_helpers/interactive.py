@@ -3,15 +3,13 @@
 import shutil
 import subprocess
 import sys
-from typing import List, Optional
 
 from rich.console import Console
 
 from ..cli_utils import exit_error
-from ..config import Config, VALID_SORT_COLUMNS
+from ..config import VALID_SORT_COLUMNS, Config
 from ..db import MemoDatabase
 from ..models import MemoRow
-
 
 console = Console()
 
@@ -19,13 +17,13 @@ console = Console()
 def pick_candidates(
     db: MemoDatabase,
     config: Config,
-    query: Optional[str],
-    tag: Optional[str],
-    exclude_tag: Optional[str],
+    query: str | None,
+    tag: str | None,
+    exclude_tag: str | None,
     shortcuts_only: bool,
-    sort_by: Optional[str],
-    desc: Optional[bool],
-) -> List[MemoRow]:
+    sort_by: str | None,
+    desc: bool | None,
+) -> list[MemoRow]:
     effective_sort = (sort_by or config.list_sort_by).lower()
     if effective_sort not in VALID_SORT_COLUMNS:
         valid = ", ".join(sorted(VALID_SORT_COLUMNS))
@@ -41,18 +39,19 @@ def pick_candidates(
     )
 
 
-def pick_with_fzf(candidates: List[MemoRow]) -> Optional[str]:
+def pick_with_fzf(candidates: list[MemoRow]) -> str | None:
     if shutil.which("fzf") is None:
         exit_error("fzf is not installed. Install fzf to use `koda pick`.")
 
     if not sys.stdin.isatty():
         exit_error("`koda pick` requires an interactive TTY.")
 
-    lines: List[str] = []
+    lines: list[str] = []
     for row in candidates:
         first_line = (row.content or "").splitlines()[0] if row.content else ""
         display = (
-            f"{row.idx}\t{row.uid}\t{row.shortcut or '-'}\t{row.tags or '-'}\t{row.created_at}\t{first_line}"
+            f"{row.idx}\t{row.uid}\t{row.shortcut or '-'}\t"
+            f"{row.tags or '-'}\t{row.created_at}\t{first_line}"
         )
         lines.append(display)
 
@@ -63,12 +62,19 @@ def pick_with_fzf(candidates: List[MemoRow]) -> Optional[str]:
     proc = subprocess.run(
         [
             "fzf",
-            "--delimiter", "\t",
-            "--with-nth", "1,3,4,6",
-            "--prompt", "koda> ",
+            "--delimiter",
+            "\t",
+            "--with-nth",
+            "1,3,4,6",
+            "--prompt",
+            "koda> ",
             "--preview",
-            "printf 'IDX: %s\\nUID: %s\\nSC: %s\\nTags: %s\\nCreated: %s\\n\\n%s\\n' {1} {2} {3} {4} {5} {6}",
-            "--preview-window", preview_window,
+            (
+                "printf 'IDX: %s\\nUID: %s\\nSC: %s\\nTags: %s\\nCreated: %s\\n\\n%s\\n' "
+                "{1} {2} {3} {4} {5} {6}"
+            ),
+            "--preview-window",
+            preview_window,
         ],
         input="\n".join(lines),
         text=True,

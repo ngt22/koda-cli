@@ -3,14 +3,14 @@
 import json
 import os
 import shutil
-import tomllib
-from dataclasses import asdict, dataclass, field, fields, replace
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any
 
+import tomllib
 from rich.console import Console
-
 
 console = Console()
 
@@ -24,18 +24,24 @@ CONFIG_PATH = Path(os.getenv("KODA_CONFIG_PATH", DEFAULT_CONFIG_PATH))
 
 
 VALID_SORT_COLUMNS = {
-    "id", "idx", "uid", "tags", "content",
-    "created_at", "modified_at", "shortcut",
+    "id",
+    "idx",
+    "uid",
+    "tags",
+    "content",
+    "created_at",
+    "modified_at",
+    "shortcut",
 }
 VALID_LIST_COLUMNS = ["idx", "uid", "sc", "tags", "content", "created_at"]
 REQUIRED_LIST_COLUMNS = {"idx"}
 
 COLUMN_DEFS: dict = {
-    "idx":        ("IDX",        {"justify": "right", "width": 4}),
-    "uid":        ("UID",        {"width": 7, "style": "dim"}),
-    "sc":         ("SC",         {"width": 10, "style": "bold green"}),
-    "tags":       ("Tags",       {"style": "magenta", "width": 15}),
-    "content":    ("Content",    {"ratio": 1}),
+    "idx": ("IDX", {"justify": "right", "width": 4}),
+    "uid": ("UID", {"width": 7, "style": "dim"}),
+    "sc": ("SC", {"width": 10, "style": "bold green"}),
+    "tags": ("Tags", {"style": "magenta", "width": 15}),
+    "content": ("Content", {"ratio": 1}),
     "created_at": ("Created At", {"width": 19}),
 }
 
@@ -72,13 +78,14 @@ class DbBackend(str, Enum):
 @dataclass
 class Config:
     """Typed snapshot of resolved configuration (defaults < file < env)."""
+
     defaults_cmd: str = "raw"
     list_per_page: int = 20
     list_rows: int = 1
     list_truncate: int = 80
     list_sort_by: str = "idx"
     list_desc: bool = False
-    list_columns: List[str] = field(default_factory=lambda: ["idx", "sc", "tags", "content"])
+    list_columns: list[str] = field(default_factory=lambda: ["idx", "sc", "tags", "content"])
     db_path: str = str(DEFAULT_DB_PATH)
     db_backend: str = "local"
     turso_url: str = ""
@@ -101,26 +108,26 @@ def _attr(dotkey: str) -> str:
 @dataclass(frozen=True)
 class FieldSpec:
     type: type
-    validator: Optional[Callable[[Any], bool]] = None
+    validator: Callable[[Any], bool] | None = None
     error: str = ""
 
 
-_FIELD_SPECS: Dict[str, FieldSpec] = {
-    "defaults.cmd":  FieldSpec(
+_FIELD_SPECS: dict[str, FieldSpec] = {
+    "defaults.cmd": FieldSpec(
         str,
         lambda v: v in tuple(c.value for c in DefaultCmd),
         "must be 'raw', 'list', 'show', or 'add'",
     ),
     "list.per_page": FieldSpec(int, lambda v: v >= 1, "must be >= 1"),
-    "list.rows":     FieldSpec(int, lambda v: v >= 0, "must be >= 0"),
+    "list.rows": FieldSpec(int, lambda v: v >= 0, "must be >= 0"),
     "list.truncate": FieldSpec(int, lambda v: v >= 0, "must be >= 0"),
-    "list.sort_by":  FieldSpec(
+    "list.sort_by": FieldSpec(
         str,
         lambda v: v in VALID_SORT_COLUMNS,
         f"must be one of: {', '.join(sorted(VALID_SORT_COLUMNS))}",
     ),
-    "list.desc":     FieldSpec(bool),
-    "list.columns":  FieldSpec(
+    "list.desc": FieldSpec(bool),
+    "list.columns": FieldSpec(
         list,
         lambda v: (
             isinstance(v, list)
@@ -130,14 +137,14 @@ _FIELD_SPECS: Dict[str, FieldSpec] = {
         ),
         f'must include "idx"; available: {", ".join(VALID_LIST_COLUMNS)}',
     ),
-    "db.path":       FieldSpec(str),
-    "db.backend":    FieldSpec(
+    "db.path": FieldSpec(str),
+    "db.backend": FieldSpec(
         str,
         lambda v: v in tuple(b.value for b in DbBackend),
         "must be 'local' or 'turso'",
     ),
-    "turso.url":     FieldSpec(str),
-    "turso.token":   FieldSpec(str),
+    "turso.url": FieldSpec(str),
+    "turso.token": FieldSpec(str),
     "git.sync_path": FieldSpec(str),
     "git.payload_file": FieldSpec(
         str,
@@ -154,7 +161,7 @@ _FIELD_SPECS: Dict[str, FieldSpec] = {
         lambda v: str(v).strip().lower() == GIT_SYNC_FORMAT_JSONL,
         f"must be {GIT_SYNC_FORMAT_JSONL!r} (case-insensitive)",
     ),
-    "exec.shell":    FieldSpec(
+    "exec.shell": FieldSpec(
         str,
         valid_exec_shell,
         f"must be an installed shell ({', '.join(EXEC_SHELL_ALLOWLIST)}) "
@@ -162,17 +169,17 @@ _FIELD_SPECS: Dict[str, FieldSpec] = {
     ),
 }
 
-ALL_KEYS: List[str] = list(_FIELD_SPECS.keys())
+ALL_KEYS: list[str] = list(_FIELD_SPECS.keys())
 
 
-_ENV_OVERRIDES: List[Tuple[str, str, Callable[[str], Any]]] = [
-    ("defaults.cmd",      "KODA_DEFAULT_CMD",      lambda v: v),
-    ("db.path",           "KODA_DB_PATH",          lambda v: v),
-    ("turso.url",         "KODA_TURSO_URL",        lambda v: v),
-    ("turso.token",       "KODA_TURSO_TOKEN",      lambda v: v),
-    ("git.sync_path",     "KODA_GIT_SYNC_PATH",    lambda v: v),
-    ("git.payload_file",  "KODA_GIT_PAYLOAD_FILE", lambda v: v),
-    ("git.sync_format",   "KODA_GIT_SYNC_FORMAT",  lambda v: v.strip().lower()),
+_ENV_OVERRIDES: list[tuple[str, str, Callable[[str], Any]]] = [
+    ("defaults.cmd", "KODA_DEFAULT_CMD", lambda v: v),
+    ("db.path", "KODA_DB_PATH", lambda v: v),
+    ("turso.url", "KODA_TURSO_URL", lambda v: v),
+    ("turso.token", "KODA_TURSO_TOKEN", lambda v: v),
+    ("git.sync_path", "KODA_GIT_SYNC_PATH", lambda v: v),
+    ("git.payload_file", "KODA_GIT_PAYLOAD_FILE", lambda v: v),
+    ("git.sync_format", "KODA_GIT_SYNC_FORMAT", lambda v: v.strip().lower()),
 ]
 
 
@@ -186,10 +193,10 @@ class ConfigManager:
     def __init__(self, config_path: Path = CONFIG_PATH) -> None:
         self.config_path = config_path
 
-    def load(self) -> Tuple[Config, Dict[str, str]]:
+    def load(self) -> tuple[Config, dict[str, str]]:
         """Return (Config, source_map). source_map[dotkey] = 'default'|'file'|'env'."""
         cfg = Config()
-        sources: Dict[str, str] = {k: "default" for k in ALL_KEYS}
+        sources: dict[str, str] = {k: "default" for k in ALL_KEYS}
 
         if self.config_path.exists():
             try:
@@ -228,7 +235,7 @@ class ConfigManager:
         """Serialize data to TOML and write to config_path."""
         self.config_path.parent.mkdir(parents=True, exist_ok=True)
         os.chmod(self.config_path.parent, 0o700)
-        lines: List[str] = []
+        lines: list[str] = []
         for section, values in data.items():
             lines.append(f"[{section}]")
             for k, v in values.items():
@@ -294,9 +301,9 @@ class ConfigManager:
         return getattr(cfg, _attr(key))
 
 
-def config_defaults_dict() -> Dict[str, Dict[str, Any]]:
+def config_defaults_dict() -> dict[str, dict[str, Any]]:
     """Build the nested {section: {key: default}} dict from Config()."""
-    out: Dict[str, Dict[str, Any]] = {}
+    out: dict[str, dict[str, Any]] = {}
     cfg = Config()
     for dotkey in ALL_KEYS:
         section, _, key = dotkey.partition(".")
