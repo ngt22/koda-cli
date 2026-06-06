@@ -73,6 +73,27 @@ We keep a [Keep a Changelog](https://keepachangelog.com/)-style `CHANGELOG.md`.
 Add a bullet under the `## [Unreleased]` section describing your change, grouped
 by `Added` / `Changed` / `Fixed` / `Removed`.
 
+## JSON output schema
+
+`list`, `show`, and `config` accept `--json` for scripting.
+
+- `koda list --json` → a JSON **array** of entry objects (all matches, paging
+  ignored). `koda show --json` → a single entry **object**. Each entry object is:
+
+  ```json
+  {
+    "id": 1, "uid": "abc1234", "idx": 0,
+    "content": "…", "tags": ["work", "home"],
+    "shortcut": null, "created_at": "…", "modified_at": "…"
+  }
+  ```
+
+  Note `tags` is a list (split on the stored comma separator).
+
+- `koda config --json` → a hierarchical object `{section: {key: value}}`.
+  `turso.token` is always emitted as `"****"`; use `koda config get turso.token`
+  for the raw value.
+
 ## Language policy
 
 - **Issues** may be written in Japanese or English — whichever is clearer.

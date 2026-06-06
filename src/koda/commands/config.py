@@ -5,6 +5,7 @@ with ``app.add_typer``. It must not import ``koda.main`` so that main can import
 ``config_app`` at assembly time without a circular import.
 """
 
+import json
 import os
 import subprocess
 import sys
@@ -26,9 +27,24 @@ config_app = typer.Typer(
 
 
 @config_app.callback(invoke_without_command=True)
-def config_show(ctx: typer.Context) -> None:
+def config_show(
+    ctx: typer.Context,
+    json_output: bool = typer.Option(
+        False, "--json", help="Output the resolved config as hierarchical JSON."
+    ),
+) -> None:
     """Show all settings with their current values and source."""
     if ctx.invoked_subcommand is not None:
+        return
+    if json_output:
+        out: dict[str, dict[str, object]] = {}
+        for dotkey in _ALL_KEYS:
+            section, _, key = dotkey.partition(".")
+            val = ConfigManager.get(get_config(), dotkey)
+            if dotkey == "turso.token" and val:
+                val = "****"  # never emit the token, consistent with the table view
+            out.setdefault(section, {})[key] = val
+        sys.stdout.write(json.dumps(out, ensure_ascii=False, indent=2) + "\n")
         return
     key_width = max(len(k) for k in _ALL_KEYS)
     src_labels = {
