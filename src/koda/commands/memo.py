@@ -1,6 +1,7 @@
 """Memo CRUD and display commands: add, remove, copy, edit, list, show, raw, tag."""
 
 import hashlib
+import json
 import os
 import re
 import subprocess
@@ -288,6 +289,36 @@ def edit(
         Path(temp_path).unlink(missing_ok=True)
 
 
+def _emit_list_json(
+    query: str | None,
+    tag: str | None,
+    exclude_tag: str | None,
+    shortcuts_only: bool,
+    sort_by: str | None,
+    desc: bool | None,
+) -> None:
+    """Print all matching entries as a JSON array (no paging)."""
+    init_db()
+    if sort_by is None:
+        sort_by = get_config().list_sort_by
+    if desc is None:
+        desc = get_config().list_desc
+    normalized_sort = sort_by.lower()
+    if normalized_sort not in VALID_SORT_COLUMNS:
+        valid = ", ".join(sorted(VALID_SORT_COLUMNS))
+        exit_error(f"Invalid --sort-by '{sort_by}'. Use one of: {valid}.")
+    rows = get_db().get_memos(
+        query,
+        tag,
+        exclude_tag,
+        shortcuts_only,
+        limit=None,
+        sort_by=normalized_sort,
+        desc=desc,
+    )
+    sys.stdout.write(json.dumps([r.to_dict() for r in rows], ensure_ascii=False, indent=2) + "\n")
+
+
 def _list_memos_impl(
     query: str | None = None,
     tag: str | None = None,
@@ -458,8 +489,14 @@ def list_memos(
             f"Available: {', '.join(VALID_LIST_COLUMNS)}. [config: list.columns]"
         ),
     ),
+    json_output: bool = typer.Option(
+        False, "--json", help="Output all matching entries as a JSON array (ignores paging)."
+    ),
 ):
     """Show entries as a table with paging and sortable columns. Alias: `koda l`."""
+    if json_output:
+        _emit_list_json(query, tag, exclude_tag, shortcuts_only, sort_by, desc)
+        return
     parsed_columns: list[str] | None = None
     if columns is not None:
         parsed_columns = [c.strip() for c in columns.split(",") if c.strip()]
@@ -482,6 +519,9 @@ def list_memos(
 @app.command()
 def show(
     ref: str | None = typer.Argument(None, help="Entry index or shortcut (default: latest)."),
+    json_output: bool = typer.Option(
+        False, "--json", help="Output the entry as a single JSON object."
+    ),
 ):
     """Print one entry with index, uid, tags, and timestamps (Rich formatted). Alias: `koda s`.
 
@@ -496,6 +536,9 @@ def show(
 
     init_db()
     row = resolve_ref(ref)
+    if json_output:
+        sys.stdout.write(json.dumps(row.to_dict(), ensure_ascii=False, indent=2) + "\n")
+        return
     _print_memo(row.uid, row.idx, row.shortcut, row.content, row.tags, row.created_at)
 
 
