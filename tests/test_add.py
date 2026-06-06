@@ -5,7 +5,8 @@ from pathlib import Path
 import pytest
 import typer
 
-import koda.main as main
+import koda.runtime as runtime
+from koda.commands import memo
 
 
 class FakeStdin:
@@ -22,8 +23,8 @@ class FakeStdin:
 
 @pytest.fixture
 def wired_db(db, monkeypatch):
-    """Point koda.main's lazy DB cache at a fresh temp database."""
-    monkeypatch.setattr(main, "_db", db)
+    """Point the lazy DB cache at a fresh temp database."""
+    monkeypatch.setattr(runtime, "_db", db)
     return db
 
 
@@ -34,19 +35,19 @@ def _latest_content(db):
 
 def test_arg_only_uses_arg(wired_db, monkeypatch):
     monkeypatch.setattr("sys.stdin", FakeStdin(tty=True))
-    main._add_impl(text=["hello", "world"])
+    memo._add_impl(text=["hello", "world"])
     assert _latest_content(wired_db) == "hello world"
 
 
 def test_stdin_only_uses_stdin(wired_db, monkeypatch):
     monkeypatch.setattr("sys.stdin", FakeStdin(data="piped body\n", tty=False))
-    main._add_impl(text=None)
+    memo._add_impl(text=None)
     assert _latest_content(wired_db) == "piped body"
 
 
 def test_arg_wins_over_stdin_and_warns(wired_db, monkeypatch, capsys):
     monkeypatch.setattr("sys.stdin", FakeStdin(data="ignored stdin", tty=False))
-    main._add_impl(text=["arg body"])
+    memo._add_impl(text=["arg body"])
     assert _latest_content(wired_db) == "arg body"
     assert "ignoring piped stdin" in capsys.readouterr().err
 
@@ -55,7 +56,7 @@ def test_empty_content_aborts_nonzero(wired_db, monkeypatch, capsys):
     """#53: empty content must abort with a non-zero exit, not save and exit 0."""
     monkeypatch.setattr("sys.stdin", FakeStdin(data="", tty=False))
     with pytest.raises(typer.Exit) as exc_info:
-        main._add_impl(text=None)
+        memo._add_impl(text=None)
     assert exc_info.value.exit_code == 1
     assert _latest_content(wired_db) is None
     assert "Empty content" in capsys.readouterr().err
@@ -65,7 +66,7 @@ def test_arg_with_empty_noninteractive_stdin_no_warning(wired_db, monkeypatch, c
     """The original bug: non-interactive shell with empty stdin (e.g. /dev/null)
     must still save the argument and not abort or warn."""
     monkeypatch.setattr("sys.stdin", FakeStdin(data="", tty=False))
-    main._add_impl(text=["hello"])
+    memo._add_impl(text=["hello"])
     assert _latest_content(wired_db) == "hello"
     assert "ignoring piped stdin" not in capsys.readouterr().err
 
@@ -77,6 +78,6 @@ def test_no_arg_no_stdin_uses_editor(wired_db, monkeypatch):
         Path(cmd[1]).write_text("from editor")
         return 0
 
-    monkeypatch.setattr(main.subprocess, "call", fake_call)
-    main._add_impl(text=None)
+    monkeypatch.setattr(memo.subprocess, "call", fake_call)
+    memo._add_impl(text=None)
     assert _latest_content(wired_db) == "from editor"

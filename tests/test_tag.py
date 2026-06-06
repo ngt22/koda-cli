@@ -8,14 +8,15 @@ message reports actual per-tag add/remove totals.
 
 import pytest
 
-import koda.main as main
+import koda.runtime as runtime
+from koda.commands import memo
 from koda.constants import TAG_SEPARATOR
 
 
 @pytest.fixture
 def wired_db(db, monkeypatch):
-    """Point koda.main's lazy DB cache at a fresh temp database."""
-    monkeypatch.setattr(main, "_db", db)
+    """Point the lazy DB cache at a fresh temp database."""
+    monkeypatch.setattr(runtime, "_db", db)
     return db
 
 
@@ -42,7 +43,7 @@ def test_add_and_remove_counts_differ(wired_db, capsys):
     _seed(wired_db, 2, [])
     _seed(wired_db, 3, ["bar"])
 
-    main.tag(indices=["1", "2", "3"], tags=["foo"], untag=["bar"])
+    memo.tag(indices=["1", "2", "3"], tags=["foo"], untag=["bar"])
 
     out = capsys.readouterr().out
     # foo added to all 3 entries; bar removed only from entries 1 and 3.
@@ -54,7 +55,7 @@ def test_add_and_remove_counts_differ(wired_db, capsys):
 
 def test_singular_wording(wired_db, capsys):
     _seed(wired_db, 1, [])
-    main.tag(indices=["1"], tags=["solo"], untag=None)
+    memo.tag(indices=["1"], tags=["solo"], untag=None)
     out = capsys.readouterr().out
     assert "Updated 1 entry (added 1 tag, removed 0 tags)." in out
 
@@ -62,7 +63,7 @@ def test_singular_wording(wired_db, capsys):
 def test_noop_when_nothing_changes(wired_db, capsys):
     """Adding a tag the entry already has, or removing one it lacks, is a no-op."""
     _seed(wired_db, 1, ["keep"])
-    main.tag(indices=["1"], tags=["keep"], untag=["absent"])
+    memo.tag(indices=["1"], tags=["keep"], untag=["absent"])
     out = capsys.readouterr().out
     assert "Updated 0 entries (added 0 tags, removed 0 tags)." in out
     assert _tags(wired_db, 1) == ["keep"]

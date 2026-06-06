@@ -4,7 +4,7 @@ import pytest
 import typer
 
 from koda.cmd_helpers.parsing import parse_indices, parse_tag_args, parse_var_items
-from koda.main import _strip_inline_comment
+from koda.runtime import _strip_inline_comment
 
 
 class TestParseIndices:
