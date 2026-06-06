@@ -22,8 +22,8 @@ class FakeStdin:
 
 @pytest.fixture
 def wired_db(db, monkeypatch):
-    """Point koda.main's module-level db at a fresh temp database."""
-    monkeypatch.setattr(main, "db", db)
+    """Point koda.main's lazy DB cache at a fresh temp database."""
+    monkeypatch.setattr(main, "_db", db)
     return db
 
 

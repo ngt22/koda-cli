@@ -32,6 +32,7 @@ from .config import (
     DEFAULT_DB_PATH,
     VALID_LIST_COLUMNS,
     VALID_SORT_COLUMNS,
+    Config,
     ConfigManager,
     ValidationError,
 )
@@ -72,7 +73,7 @@ class KodaGroup(TyperGroup):
             if cmd_name in ALIASES:
                 args = [ALIASES[cmd_name]] + list(args[1:])
             elif self.get_command(ctx, cmd_name) is None and not cmd_name.startswith("-"):
-                default_cmd = config.defaults_cmd
+                default_cmd = get_config().defaults_cmd
                 target_name = ALIASES.get(default_cmd, default_cmd)
                 target_cmd = self.get_command(ctx, target_name)
                 if target_cmd is not None:
@@ -95,9 +96,61 @@ app = typer.Typer(
 )
 console = Console()
 
-_config_manager = ConfigManager()
-config, _config_sources = _config_manager.load()
-DB_PATH = Path(config.db_path).expanduser()
+# Config and DB are resolved lazily so that ``import koda.main`` has no
+# side effects (no config load, no DB handle). This keeps the module
+# importable in environments without HOME/env set and makes it testable.
+_config_manager: ConfigManager | None = None
+_config: Config | None = None
+_config_sources: dict[str, str] | None = None
+_db: MemoDatabase | None = None
+
+
+def get_config_manager() -> ConfigManager:
+    """Return the process-wide ConfigManager, creating it on first use."""
+    global _config_manager
+    if _config_manager is None:
+        _config_manager = ConfigManager()
+    return _config_manager
+
+
+def _resolve_config() -> None:
+    """Load the config + per-key source map once and cache them."""
+    global _config, _config_sources
+    if _config is None:
+        _config, _config_sources = get_config_manager().load()
+
+
+def get_config() -> Config:
+    """Return the loaded Config, loading it lazily on first use."""
+    _resolve_config()
+    assert _config is not None
+    return _config
+
+
+def get_config_sources() -> dict[str, str]:
+    """Return the per-key config source map, loading lazily on first use."""
+    _resolve_config()
+    assert _config_sources is not None
+    return _config_sources
+
+
+def _resolve_db() -> MemoDatabase:
+    """Return the MemoDatabase handle, constructing it lazily on first use."""
+    global _db
+    if _db is None:
+        cfg = get_config()
+        _db = MemoDatabase(
+            backend=cfg.db_backend,
+            path=Path(cfg.db_path).expanduser(),
+            turso_url=cfg.turso_url,
+            turso_token=cfg.turso_token,
+        )
+    return _db
+
+
+def get_db() -> MemoDatabase:
+    """Return the lazily constructed MemoDatabase handle."""
+    return _resolve_db()
 
 
 def _validate_list_columns(columns: list[str], source: str) -> None:
@@ -105,14 +158,6 @@ def _validate_list_columns(columns: list[str], source: str) -> None:
         ConfigManager.validate("list.columns", columns)
     except ValidationError:
         exit_error(f"Invalid {source}: {ConfigManager.error_message('list.columns')}")
-
-
-db = MemoDatabase(
-    backend=config.db_backend,
-    path=DB_PATH,
-    turso_url=config.turso_url,
-    turso_token=config.turso_token,
-)
 
 
 def version_callback(value: bool):
@@ -128,7 +173,7 @@ def _generate_uid(content: str, created_at: str) -> str:
 
 def init_db():
     try:
-        db.init_db()
+        get_db().init_db()
     except typer.Exit:
         raise
     except DatabaseError as e:
@@ -143,16 +188,16 @@ def resolve_ref(ref: str | None):
     ref=None → latest; digit string → idx lookup; other string → shortcut lookup.
     """
     if ref is None:
-        row = db.get_latest_entry()
+        row = get_db().get_latest_entry()
         if row is None:
             exit_error("No entries in database.", style="yellow")
         return row
     if ref.isdigit():
-        row = db.get_memo_by_idx(int(ref))
+        row = get_db().get_memo_by_idx(int(ref))
         if row is None:
             exit_error(f"No entry at index {ref}.", style="yellow")
         return row
-    row = db.get_memo_by_shortcut(ref)
+    row = get_db().get_memo_by_shortcut(ref)
     if row is None:
         exit_error(f"No entry with shortcut {ref!r}.", style="yellow")
     return row
@@ -285,7 +330,7 @@ def main(
 ):
     """Default: run the default command (see `koda config get defaults.cmd`)."""
     if ctx.invoked_subcommand is None:
-        cmd = config.defaults_cmd
+        cmd = get_config().defaults_cmd
         if cmd == "list":
             _list_memos_impl()
         elif cmd == "show":
@@ -300,7 +345,7 @@ def main(
 
 def update_memo_full(memo_id: int, content: str, tags: str, shortcut: str | None, created_at: str):
     now = datetime.now().strftime(DATETIME_FMT)
-    db.update_memo(memo_id, content, tags, shortcut, created_at, now)
+    get_db().update_memo(memo_id, content, tags, shortcut, created_at, now)
 
 
 def _add_impl(
@@ -342,7 +387,7 @@ def _add_impl(
     now = datetime.now().strftime(DATETIME_FMT)
     uid = _generate_uid(content, now)
     try:
-        with db.connection() as conn:
+        with get_db().connection() as conn:
             new_idx = MemoDatabase.next_idx(conn)
             conn.execute(
                 "INSERT INTO memos "
@@ -407,13 +452,13 @@ def rm(
             idx_list = parse_indices(indices)
             target_rows = []
             for idx in idx_list:
-                row = db.get_memo_by_idx(idx)
+                row = get_db().get_memo_by_idx(idx)
                 if row is None:
                     console.print(f"[yellow]No entry at index {idx}, skipping.[/yellow]")
                 else:
                     target_rows.append(row)
         else:
-            target_rows = db.get_memos_all(query=query, tag=tag, sort_by="idx")
+            target_rows = get_db().get_memos_all(query=query, tag=tag, sort_by="idx")
 
         if not target_rows:
             console.print("[yellow]No matching entries.[/yellow]")
@@ -432,7 +477,7 @@ def rm(
             raise typer.Exit(code=0)
 
         ids = [row.id for row in target_rows]
-        with db.connection() as conn:
+        with get_db().connection() as conn:
             conn.executemany("DELETE FROM memos WHERE id = ?", [(id_,) for id_ in ids])
         console.print(f"[red]Deleted {n} entr{'y' if n == 1 else 'ies'}.[/red]")
 
@@ -446,7 +491,7 @@ def rm(
             console.print("[yellow]Cancelled.[/yellow]")
             raise typer.Exit(code=0)
 
-        db.delete_memo(row.id)
+        get_db().delete_memo(row.id)
         preview = row.content.splitlines()[0][:50] if row.content else ""
         console.print(f"[red]Deleted [{row.idx}]: {preview}...[/red]")
 
@@ -462,7 +507,7 @@ def copy(
     row = resolve_ref(ref)
     now = datetime.now().strftime(DATETIME_FMT)
     new_uid = _generate_uid(row.content or "", now)
-    with db.connection() as conn:
+    with get_db().connection() as conn:
         new_idx = MemoDatabase.next_idx(conn)
         conn.execute(
             "INSERT INTO memos "
@@ -558,20 +603,20 @@ def _list_memos_impl(
     init_db()
 
     if columns is None:
-        columns = config.list_columns
+        columns = get_config().list_columns
         _validate_list_columns(columns, "list.columns")
     if per_page is None:
-        per_page = config.list_per_page
+        per_page = get_config().list_per_page
     elif per_page < 1:
         exit_error("--per-page must be >= 1.")
     if sort_by is None:
-        sort_by = config.list_sort_by
+        sort_by = get_config().list_sort_by
     if desc is None:
-        desc = config.list_desc
+        desc = get_config().list_desc
     if rows is None:
-        rows = str(config.list_rows)
+        rows = str(get_config().list_rows)
     if truncate is None:
-        truncate = config.list_truncate
+        truncate = get_config().list_truncate
     elif truncate < 0:
         exit_error("--truncate must be 0 or greater.")
 
@@ -589,7 +634,7 @@ def _list_memos_impl(
         exit_error("--rows must be an integer of 0 or greater.")
     rows_value = None if parsed_rows == 0 else parsed_rows
 
-    total_count, max_idx = db.get_memo_stats(query, tag, exclude_tag, shortcuts_only)
+    total_count, max_idx = get_db().get_memo_stats(query, tag, exclude_tag, shortcuts_only)
     total_pages = (total_count + per_page - 1) // per_page if total_count else 0
 
     if total_pages > 0 and page > total_pages:
@@ -602,7 +647,7 @@ def _list_memos_impl(
         raise typer.Exit(code=1)
 
     offset = (page - 1) * per_page
-    memos = db.get_memos(
+    memos = get_db().get_memos(
         query,
         tag,
         exclude_tag,
@@ -774,11 +819,13 @@ def pick(
     action: str | None = (
         None
         if print_id
-        else resolve_pick_action(config, edit_mode, exec_mode, raw_mode, show_mode, print_id)
+        else resolve_pick_action(get_config(), edit_mode, exec_mode, raw_mode, show_mode, print_id)
     )
 
     init_db()
-    candidates = pick_candidates(db, config, query, tag, exclude_tag, shortcuts_only, sort_by, desc)
+    candidates = pick_candidates(
+        get_db(), get_config(), query, tag, exclude_tag, shortcuts_only, sort_by, desc
+    )
     if not candidates:
         exit_error("No entries found.", style="yellow")
 
@@ -881,7 +928,7 @@ def exec_memo(
     init_db()
     row = resolve_ref(ref)
     content = _apply_vars(row.content.strip() if row.content else "", vars)
-    shell = config.exec_shell
+    shell = get_config().exec_shell
     try:
         ConfigManager.validate("exec.shell", shell)
     except ValidationError:
@@ -908,7 +955,7 @@ def tag(
     remove_list = parse_tag_args(untag)
 
     updated = 0
-    with db.connection() as conn:
+    with get_db().connection() as conn:
         for idx in idx_list:
             row = conn.execute("SELECT id, tags FROM memos WHERE idx = ?", (idx,)).fetchone()
             if row is None:
@@ -945,7 +992,7 @@ def move(
     init_db()
     if from_idx == to_idx:
         return
-    with db.connection() as conn:
+    with get_db().connection() as conn:
         if conn.execute("SELECT 1 FROM memos WHERE idx = ?", (from_idx,)).fetchone() is None:
             exit_error(f"No entry at index {from_idx}.")
         if conn.execute("SELECT 1 FROM memos WHERE idx = ?", (to_idx,)).fetchone() is not None:
@@ -970,12 +1017,12 @@ def push(
     Alias: `koda push`.
     """
     init_db()
-    git_sync.require_jsonl_format(config)
+    git_sync.require_jsonl_format(get_config())
     git_sync.require_git_cli()
-    sync_root = git_sync.resolve_sync_root(config)
+    sync_root = git_sync.resolve_sync_root(get_config())
     repo = git_sync.GitSyncRepo(sync_root)
     repo.ensure_worktree()
-    payload_path = git_sync.resolve_payload_path(config, sync_root)
+    payload_path = git_sync.resolve_payload_path(get_config(), sync_root)
     rel = payload_path.relative_to(sync_root).as_posix()
 
     if payload_file is not None:
@@ -987,7 +1034,7 @@ def push(
         except Exception as e:
             exit_error(f"Invalid sync payload: {e}")
     else:
-        data = git_sync.GitSyncPayload.dump(db)
+        data = git_sync.GitSyncPayload.dump(get_db())
 
     repo.pull_rebase_if_remote()
 
@@ -1030,17 +1077,17 @@ def pull(
     Merge key is uid + modified_at. Alias: `koda pull`.
     """
     init_db()
-    git_sync.require_jsonl_format(config)
+    git_sync.require_jsonl_format(get_config())
     if local_payload_path is not None:
         if not local_payload_path.is_file():
             exit_error(f"--file does not exist: {local_payload_path}")
         data = local_payload_path.read_bytes()
     else:
         git_sync.require_git_cli()
-        sync_root = git_sync.resolve_sync_root(config)
+        sync_root = git_sync.resolve_sync_root(get_config())
         repo = git_sync.GitSyncRepo(sync_root)
         repo.ensure_worktree()
-        payload_path = git_sync.resolve_payload_path(config, sync_root)
+        payload_path = git_sync.resolve_payload_path(get_config(), sync_root)
         repo.pull_rebase_if_remote()
         if not payload_path.is_file():
             exit_error(f"Payload file missing after pull: {payload_path}")
@@ -1051,7 +1098,7 @@ def pull(
     except Exception as e:
         exit_error(f"Invalid sync payload: {e}")
 
-    ins, upd, skp, dsc = git_sync.MemoMerger(db).merge(rows)
+    ins, upd, skp, dsc = git_sync.MemoMerger(get_db()).merge(rows)
     tail = (
         f", [yellow]{dsc}[/yellow] shortcut(s) dropped (conflicts with local shortcuts)"
         if dsc
@@ -1075,7 +1122,7 @@ def shift_cmd(
     init_db()
     if count == 0:
         return
-    with db.connection() as conn:
+    with get_db().connection() as conn:
         if count < 0:
             if start + count < 0:
                 exit_error(
@@ -1112,7 +1159,7 @@ def swap(
     init_db()
     if idx1 == idx2:
         return
-    with db.connection() as conn:
+    with get_db().connection() as conn:
         a = conn.execute("SELECT id FROM memos WHERE idx = ?", (idx1,)).fetchone()
         b = conn.execute("SELECT id FROM memos WHERE idx = ?", (idx2,)).fetchone()
         if a is None:
@@ -1130,7 +1177,7 @@ def swap(
 def compact_indices():
     """Fill index gaps by reassigning idx to contiguous values from 0. Alias: `koda k`."""
     init_db()
-    with db.connection() as conn:
+    with get_db().connection() as conn:
         rows = conn.execute("SELECT id, idx FROM memos ORDER BY idx ASC, id ASC").fetchall()
         if not rows:
             console.print("[yellow]No entries in database.[/yellow]")
@@ -1180,8 +1227,8 @@ def config_show(ctx: typer.Context) -> None:
         "env": "[cyan]env[/cyan]",
     }
     for dotkey in _ALL_KEYS:
-        val = ConfigManager.get(config, dotkey)
-        src = _config_sources.get(dotkey, "default")
+        val = ConfigManager.get(get_config(), dotkey)
+        src = get_config_sources().get(dotkey, "default")
         label = src_labels.get(src, "[dim]default[/dim]")
         display_val = "****" if dotkey == "turso.token" and val else str(val)
         console.print(f"  {dotkey:<{key_width}} = {display_val:<24} {label}")
@@ -1194,7 +1241,7 @@ def config_get(
     """Print a single config value (plain text, for scripting)."""
     if key not in _ALL_KEYS:
         exit_error(f"Unknown key: {key!r}. Valid keys: {', '.join(sorted(_ALL_KEYS))}")
-    sys.stdout.write(str(ConfigManager.get(config, key)) + "\n")
+    sys.stdout.write(str(ConfigManager.get(get_config(), key)) + "\n")
 
 
 @config_app.command("set")
@@ -1212,13 +1259,13 @@ def config_set_cmd(
         exit_error(str(e))
     sec, subkey = key.split(".", 1)
     try:
-        file_data = _config_manager.read_raw()
+        file_data = get_config_manager().read_raw()
     except ValidationError as e:
         exit_error(str(e))
     if sec not in file_data:
         file_data[sec] = {}
     file_data[sec][subkey] = coerced
-    _config_manager.write_raw(file_data)
+    get_config_manager().write_raw(file_data)
     console.print(f"[green]Set {key} = {coerced!r}[/green]")
 
 
@@ -1231,7 +1278,7 @@ def config_unset(
         exit_error(f"Unknown key: {key!r}. Valid keys: {', '.join(sorted(_ALL_KEYS))}")
     sec, subkey = key.split(".", 1)
     try:
-        file_data = _config_manager.read_raw()
+        file_data = get_config_manager().read_raw()
     except ValidationError as e:
         exit_error(str(e))
     if sec not in file_data or subkey not in file_data[sec]:
@@ -1240,7 +1287,7 @@ def config_unset(
     del file_data[sec][subkey]
     if not file_data[sec]:
         del file_data[sec]
-    _config_manager.write_raw(file_data)
+    get_config_manager().write_raw(file_data)
     default_val = ConfigManager.default_for(key)
     console.print(f"[green]Unset {key} (reverts to default: {default_val!r})[/green]")
 
