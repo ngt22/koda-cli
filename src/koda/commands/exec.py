@@ -7,7 +7,12 @@ import typer
 
 from ..cli_utils import exit_error
 from ..cmd_helpers.display import print_memo as _print_memo
-from ..cmd_helpers.interactive import pick_candidates, pick_with_fzf, resolve_pick_action
+from ..cmd_helpers.interactive import (
+    pick_candidates,
+    pick_with_fzf,
+    pick_with_fzf_multi,
+    resolve_pick_action,
+)
 from ..config import ConfigManager, ValidationError
 from ..main import app
 from ..runtime import (
@@ -115,16 +120,22 @@ def pick(
     show_mode: bool = typer.Option(
         False, "--show", "-s", help="Show selected entry with metadata."
     ),
+    multi: bool = typer.Option(
+        False,
+        "--multi",
+        "-m",
+        help="Multi-select. Prints selected IDXs (pipe to remove/tag), or applies --raw/--show.",
+    ),
 ):
-    """Pick an entry with fzf, then run an action (or print IDX). Alias: `koda p`."""
+    """Pick an entry with fzf, then run an action (or print IDX). Alias: `koda p`.
+
+    With --multi, select several entries: by default their IDXs are printed
+    (one per line) for piping, e.g. `koda pick -m | xargs koda remove -f`.
+    --raw/--show apply the action to each selection; --edit/--exec are
+    single-entry only. Extra fzf flags can be set via KODA_FZF_OPTS.
+    """
     if print_id and (edit_mode or exec_mode or raw_mode or show_mode):
         exit_error("--print-id/-p cannot be combined with action flags.")
-
-    action: str | None = (
-        None
-        if print_id
-        else resolve_pick_action(get_config(), edit_mode, exec_mode, raw_mode, show_mode, print_id)
-    )
 
     init_db()
     candidates = pick_candidates(
@@ -132,6 +143,30 @@ def pick(
     )
     if not candidates:
         exit_error("No entries found.", style="yellow")
+
+    if multi:
+        if edit_mode or exec_mode:
+            exit_error(
+                "--multi cannot be combined with --edit/--exec; use --raw/--show, "
+                "or pipe --print-id output to `koda remove`/`koda tag`."
+            )
+        refs = pick_with_fzf_multi(candidates)
+        if not refs:
+            raise typer.Exit(code=0)
+        if not (raw_mode or show_mode):
+            for ref in refs:
+                sys.stdout.write(ref + "\n")
+            return
+        action = "raw" if raw_mode else "show"
+        for ref in refs:
+            _run_pick_action(action, ref)
+        return
+
+    action: str | None = (
+        None
+        if print_id
+        else resolve_pick_action(get_config(), edit_mode, exec_mode, raw_mode, show_mode, print_id)
+    )
 
     selected_ref = pick_with_fzf(candidates)
     if selected_ref is None:

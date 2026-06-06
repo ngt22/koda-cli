@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   changed) between the local database and the remote payload.
 - `koda backup --out PATH` writes a consistent single-file SQLite snapshot
   (`VACUUM INTO`).
+- `koda pick --multi/-m` for fzf multi-select: prints selected IDXs (pipe to
+  `remove`/`tag`) or applies `--raw`/`--show` per selection. Extra fzf flags
+  via the `KODA_FZF_OPTS` environment variable.
 
 ## [1.2.0] - 2026-06-06
 
