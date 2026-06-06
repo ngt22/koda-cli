@@ -26,16 +26,8 @@ config_app = typer.Typer(
 )
 
 
-@config_app.callback(invoke_without_command=True)
-def config_show(
-    ctx: typer.Context,
-    json_output: bool = typer.Option(
-        False, "--json", help="Output the resolved config as hierarchical JSON."
-    ),
-) -> None:
-    """Show all settings with their current values and source."""
-    if ctx.invoked_subcommand is not None:
-        return
+def _render_config(json_output: bool) -> None:
+    """Print every setting with its value (and source, in the table view)."""
     if json_output:
         out: dict[str, dict[str, object]] = {}
         for dotkey in _ALL_KEYS:
@@ -58,6 +50,32 @@ def config_show(
         label = src_labels.get(src, "[dim]default[/dim]")
         display_val = "****" if dotkey == "turso.token" and val else str(val)
         console.print(f"  {dotkey:<{key_width}} = {display_val:<24} {label}")
+
+
+@config_app.callback(invoke_without_command=True)
+def config_show(
+    ctx: typer.Context,
+    json_output: bool = typer.Option(
+        False, "--json", help="Output the resolved config as hierarchical JSON."
+    ),
+) -> None:
+    """Show all settings with their current values and source.
+
+    Running bare `koda config` is equivalent to `koda config show`.
+    """
+    if ctx.invoked_subcommand is not None:
+        return
+    _render_config(json_output)
+
+
+@config_app.command("show")
+def config_show_cmd(
+    json_output: bool = typer.Option(
+        False, "--json", help="Output the resolved config as hierarchical JSON."
+    ),
+) -> None:
+    """Show all settings with their current values and source (same as bare `koda config`)."""
+    _render_config(json_output)
 
 
 @config_app.command("get")
