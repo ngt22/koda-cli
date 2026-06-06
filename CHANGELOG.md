@@ -1,0 +1,81 @@
+# Changelog
+
+All notable changes to this project are documented here.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+## [1.2.0] - 2026-06-06
+
+### Added
+- Git sync over JSON Lines: `push` / `pull` commands plus `git.*` configuration,
+  merging by `uid` + `modified_at`.
+- `list.columns` configuration to toggle which columns `koda list` shows.
+- Developer infrastructure: ruff (lint + format), a GitHub Actions CI matrix on
+  Python 3.10/3.11/3.12, pre-commit hooks, and a `PRAGMA user_version` migration
+  framework.
+- `CONTRIBUTING.md`, GitHub issue/PR templates, and an MIT `LICENSE` file.
+
+### Changed
+- Split the `main.py` monolith into a `koda/commands/` package plus a shared
+  `koda/runtime.py`; `main.py` is now thin wiring.
+- Config and database are now resolved lazily, so importing the CLI has no side
+  effects.
+- Consolidated `get_memos` / `get_memos_all` into a single method and
+  straightened `MemoMerger.merge`'s insert path.
+
+### Fixed
+- `raw` output is now newline-terminated for POSIX tool interop.
+- `add` exits non-zero on empty-content abort and prioritizes text arguments
+  over piped stdin.
+- Error output now goes to stderr instead of stdout.
+- `exec` runs multi-line bodies in a single shell.
+- `tag` reports accurate add/remove counts in its completion message.
+
+### Security
+- Restricted `exec.shell` to an allowlisted, absolute-path executable.
+- Hardened on-disk permissions for the config file and database.
+
+## [1.1.1] - 2026-04-24
+
+### Fixed
+- Convert query parameters to tuples for Turso libsql compatibility.
+
+## [1.1.0] - 2026-04-24
+
+### Added
+- Turso remote database backend.
+- Neovim integration.
+
+### Fixed
+- Use CSV (comma + quotes) as the positional-variable delimiter and stop
+  escaping positional values with `re.escape()`.
+
+## [1.0.2] - 2026-04-22
+
+### Added
+- Interactive `pick` command backed by fzf.
+
+## [1.0.1] - 2026-04-22
+
+### Fixed
+- Expand `~` in the database path from config.
+- Use the correct package name for version lookup.
+
+## [1.0.0] - 2026-04-22
+
+### Added
+- Initial public release: SQLite-backed memo store with `add`, `list`, `show`,
+  `raw`, `edit`, `remove`, `copy`, `tag`, `exec`, index management
+  (`move` / `swap` / `shift` / `compact`), shortcuts, tags, variable
+  substitution, and a `config` subcommand.
+
+[Unreleased]: https://github.com/ngt22/koda-cli/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/ngt22/koda-cli/compare/v1.1.1...v1.2.0
+[1.1.1]: https://github.com/ngt22/koda-cli/compare/v1.1.0...v1.1.1
+[1.1.0]: https://github.com/ngt22/koda-cli/compare/v1.0.2...v1.1.0
+[1.0.2]: https://github.com/ngt22/koda-cli/compare/v1.0.1...v1.0.2
+[1.0.1]: https://github.com/ngt22/koda-cli/compare/v1.0.0...v1.0.1
+[1.0.0]: https://github.com/ngt22/koda-cli/releases/tag/v1.0.0
