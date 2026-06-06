@@ -54,7 +54,7 @@ def test_compact_dry_run_does_not_change(wired_db, capsys):
 
 def test_tag_dry_run_does_not_change(wired_db, capsys):
     _seed(wired_db, 0, tags=["keep"])
-    memo.tag(indices=["0"], tags=["new"], untag=None, dry_run=True)
+    memo.tag(indices=["0"], tags=["new"], untag=None, dry_run=True, quiet=False)
     row = wired_db.get_memo_by_idx(0)
     assert row.tags == "keep"
     assert "Would update 1 entry (added 1 tag, removed 0 tags)" in capsys.readouterr().out

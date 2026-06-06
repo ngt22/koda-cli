@@ -15,6 +15,7 @@ def move(
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Show what would change without modifying the database."
     ),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress the success message."),
 ):
     """Move entry at FROM to an unoccupied display position TO. Alias: `koda m`."""
     init_db()
@@ -34,7 +35,8 @@ def move(
             console.print(f"[cyan]Would move {from_idx} → {to_idx}.[/cyan]")
             return
         conn.execute("UPDATE memos SET idx = ? WHERE idx = ?", (to_idx, from_idx))
-    console.print(f"[green]Moved {from_idx} → {to_idx}.[/green]")
+    if not quiet:
+        console.print(f"[green]Moved {from_idx} → {to_idx}.[/green]")
 
 
 @app.command(name="shift")
@@ -92,6 +94,7 @@ def shift_cmd(
 def swap(
     idx1: int = typer.Argument(..., help="First display index."),
     idx2: int = typer.Argument(..., help="Second display index."),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress the success message."),
 ):
     """Swap the display positions of two entries. Alias: `koda w`."""
     init_db()
@@ -108,7 +111,8 @@ def swap(
         conn.execute("UPDATE memos SET idx = -1 WHERE id = ?", (a[0],))
         conn.execute("UPDATE memos SET idx = ? WHERE id = ?", (idx1, b[0]))
         conn.execute("UPDATE memos SET idx = ? WHERE id = ?", (idx2, a[0]))
-    console.print(f"[green]Swapped {idx1} ↔ {idx2}.[/green]")
+    if not quiet:
+        console.print(f"[green]Swapped {idx1} ↔ {idx2}.[/green]")
 
 
 @app.command(name="compact")
