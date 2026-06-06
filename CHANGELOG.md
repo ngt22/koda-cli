@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--quiet/-q` on `add`, `edit`, `tag`, `move`, and `swap` suppresses the
   success message; `add --print-uid` / `add --print-idx` print the new
   entry's uid / idx to stdout for pipelines.
+- `koda export [--out PATH]` writes all entries as JSON Lines to stdout or a
+  file, and `koda import <file>` merges a JSONL file into the local database.
 
 ## [1.2.0] - 2026-06-06
 

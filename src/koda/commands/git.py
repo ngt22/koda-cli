@@ -1,6 +1,7 @@
-"""Git sync commands: push, pull."""
+"""Git sync and payload I/O commands: push, pull, export, import."""
 
 import subprocess
+import sys
 from pathlib import Path
 
 import typer
@@ -9,6 +10,25 @@ from .. import git_sync
 from ..cli_utils import exit_error
 from ..main import app
 from ..runtime import console, get_config, get_db, init_db
+
+
+def _merge_payload(data: bytes) -> None:
+    """Load a JSONL payload and merge it into the local DB, printing a summary."""
+    try:
+        rows = git_sync.GitSyncPayload.load(data)
+    except Exception as e:
+        exit_error(f"Invalid sync payload: {e}")
+
+    ins, upd, skp, dsc = git_sync.MemoMerger(get_db()).merge(rows)
+    tail = (
+        f", [yellow]{dsc}[/yellow] shortcut(s) dropped (conflicts with local shortcuts)"
+        if dsc
+        else ""
+    )
+    console.print(
+        f"merged memos: [cyan]{ins}[/cyan] inserted, [cyan]{upd}[/cyan] updated, "
+        f"[dim]{skp}[/dim] skipped (older or invalid entries){tail}."
+    )
 
 
 @app.command()
@@ -98,19 +118,40 @@ def pull(
             exit_error(f"Payload file missing after pull: {payload_path}")
         data = payload_path.read_bytes()
 
-    try:
-        rows = git_sync.GitSyncPayload.load(data)
-    except Exception as e:
-        exit_error(f"Invalid sync payload: {e}")
-
-    ins, upd, skp, dsc = git_sync.MemoMerger(get_db()).merge(rows)
-    tail = (
-        f", [yellow]{dsc}[/yellow] shortcut(s) dropped (conflicts with local shortcuts)"
-        if dsc
-        else ""
-    )
-    console.print(
-        f"merged remote memos: [cyan]{ins}[/cyan] inserted, [cyan]{upd}[/cyan] updated, "
-        f"[dim]{skp}[/dim] skipped (older or invalid entries){tail}."
-    )
+    _merge_payload(data)
     console.print("[green]Pull complete.[/green]")
+
+
+@app.command()
+def export(
+    out: Path | None = typer.Option(
+        None, "--out", "-o", help="Write JSONL to this file instead of stdout."
+    ),
+):
+    """Export all entries as JSON Lines (uid-sorted) to stdout or a file.
+
+    The output is the same payload format used by `push` / `pull`.
+    """
+    init_db()
+    data = git_sync.GitSyncPayload.dump(get_db())
+    if out is not None:
+        git_sync.atomic_write_bytes(out, data)
+        console.print(f"[green]Exported to {out}.[/green]")
+    else:
+        sys.stdout.buffer.write(data)
+
+
+@app.command(name="import")
+def import_memos(
+    file: Path = typer.Argument(..., help="JSONL file to import (merged by uid + modified_at)."),
+):
+    """Import entries from a local JSONL file, merging into the local database.
+
+    Equivalent to `pull --file <file>` but without touching any Git clone.
+    """
+    init_db()
+    if not file.is_file():
+        exit_error(f"File does not exist: {file}")
+    data = file.read_bytes()
+    _merge_payload(data)
+    console.print("[green]Import complete.[/green]")
