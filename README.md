@@ -249,6 +249,31 @@ koda x backup   # runs: tar czf ~/backups/src-20260505-1430.tar.gz ./src
 koda x backup   # runs: tar czf ~/backups/src-20260506-0910.tar.gz ./src
 ```
 
+**Multi-line scripts — the whole body runs in one shell:**
+
+A saved entry is not limited to a single line. `koda x` passes the entire body to the shell as one program, so variables, loops, functions, and heredocs all work across lines. Save a script with `koda a` (open `$EDITOR` with no argument, or pipe it in) and run it later by shortcut.
+
+```bash
+# Pipe a multi-line script into a new entry
+printf 'a=1\nb=2\necho "sum=$((a + b))"\n' | koda a -s sum
+koda x sum            # → sum=3
+```
+
+```bash
+# A for-loop body kept as one runnable entry
+koda a -s ping3       # opens $EDITOR; paste:
+#   for host in web db cache; do
+#     echo "pinging $host"; ping -c1 "$host" >/dev/null && echo "  ok"
+#   done
+koda x ping3
+```
+
+```bash
+# Function definitions and heredocs survive too
+printf 'greet() {\n  echo "hi $1"\n}\ngreet "$1"\n' | koda a -s greet
+koda x greet -V world   # → hi world
+```
+
 > **Security**: only store trusted commands. `exec` runs the body through the configured shell (`sh` by default).
 
 ---
