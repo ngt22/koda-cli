@@ -29,7 +29,7 @@ def pick_candidates(
         valid = ", ".join(sorted(VALID_SORT_COLUMNS))
         exit_error(f"Invalid --sort-by '{sort_by}'. Use one of: {valid}.")
     effective_desc = config.list_desc if desc is None else desc
-    return db.get_memos_all(
+    return db.get_memos(
         query=query,
         tag=tag,
         exclude_tag=exclude_tag,
