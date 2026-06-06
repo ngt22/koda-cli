@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import pytest
+import typer
 
 import koda.main as main
 
@@ -48,6 +49,16 @@ def test_arg_wins_over_stdin_and_warns(wired_db, monkeypatch, capsys):
     main._add_impl(text=["arg body"])
     assert _latest_content(wired_db) == "arg body"
     assert "ignoring piped stdin" in capsys.readouterr().err
+
+
+def test_empty_content_aborts_nonzero(wired_db, monkeypatch, capsys):
+    """#53: empty content must abort with a non-zero exit, not save and exit 0."""
+    monkeypatch.setattr("sys.stdin", FakeStdin(data="", tty=False))
+    with pytest.raises(typer.Exit) as exc_info:
+        main._add_impl(text=None)
+    assert exc_info.value.exit_code == 1
+    assert _latest_content(wired_db) is None
+    assert "Empty content" in capsys.readouterr().err
 
 
 def test_arg_with_empty_noninteractive_stdin_no_warning(wired_db, monkeypatch, capsys):

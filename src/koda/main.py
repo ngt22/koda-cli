@@ -325,8 +325,7 @@ def _add_impl(
             Path(temp_path).unlink(missing_ok=True)
 
     if not content:
-        console.print("[yellow]Aborted: Empty content.[/yellow]")
-        return
+        exit_error("Aborted: Empty content.", style="yellow")
 
     content = content.encode('utf-8', 'surrogateescape').decode('utf-8', 'ignore')
 
