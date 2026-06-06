@@ -3,12 +3,31 @@
 import json
 
 import pytest
+import typer
 
-from koda.git_sync import GitSyncPayload
+from koda.config import Config
+from koda.git_sync import GitSyncPayload, resolve_payload_path
 
 
 def test_dump_empty_db(db):
     assert GitSyncPayload.dump(db) == b""
+
+
+@pytest.mark.parametrize(
+    "rel",
+    [".git/hooks/post-merge", ".git/config", "sub/.git/hooks/post-merge", "../escape.jsonl"],
+)
+def test_resolve_payload_path_rejects_unsafe(tmp_path, rel):
+    """Even when validate() is bypassed (file/env config), resolve_payload_path
+    must refuse '.git' and traversal components before writing into the repo."""
+    cfg = Config(git_payload_file=rel)
+    with pytest.raises(typer.Exit):
+        resolve_payload_path(cfg, tmp_path)
+
+
+def test_resolve_payload_path_allows_normal(tmp_path):
+    cfg = Config(git_payload_file="koda-sync.jsonl")
+    assert resolve_payload_path(cfg, tmp_path) == (tmp_path / "koda-sync.jsonl")
 
 
 def test_load_empty_bytes():

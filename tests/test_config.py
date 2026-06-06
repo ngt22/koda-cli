@@ -106,7 +106,18 @@ class TestValidate:
     def test_payload_file_valid(self):
         assert ConfigManager.validate("git.payload_file", "koda-sync.jsonl") == "koda-sync.jsonl"
 
-    @pytest.mark.parametrize("value", ["", "   ", "/abs/path.jsonl", "../escape.jsonl"])
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "",
+            "   ",
+            "/abs/path.jsonl",
+            "../escape.jsonl",
+            ".git/hooks/post-merge",
+            ".git/config",
+            "sub/.git/hooks/post-merge",
+        ],
+    )
     def test_payload_file_invalid(self, value):
         with pytest.raises(ValidationError):
             ConfigManager.validate("git.payload_file", value)

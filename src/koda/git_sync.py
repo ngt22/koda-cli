@@ -51,6 +51,15 @@ def resolve_payload_path(config: Config, sync_root: Path) -> Path:
     if not rel:
         rel = "koda-sync.jsonl"
     rel_path = Path(rel)
+    if rel_path.is_absolute() or ".." in rel_path.parts or ".git" in rel_path.parts:
+        # The config validator already rejects these, but values loaded from a
+        # hand-edited config.toml or KODA_GIT_PAYLOAD_FILE bypass validate(),
+        # so re-check here before we ever write into the repo. Blocking '.git'
+        # stops the payload from overwriting e.g. .git/hooks/post-merge.
+        exit_error(
+            "git.payload_file must be a relative path inside git.sync_path "
+            "without '..' or '.git' components."
+        )
     payload = (sync_root / rel_path).resolve()
     try:
         payload.relative_to(sync_root)
