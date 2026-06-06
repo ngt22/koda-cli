@@ -5,14 +5,14 @@ import sys
 
 import pytest
 
-import koda.main as main
+import koda.runtime as runtime
 from koda.db import MemoDatabase
 
 
 @pytest.fixture
 def wired_db(db, monkeypatch):
-    """Point koda.main's lazy DB cache at a fresh temp database."""
-    monkeypatch.setattr(main, "_db", db)
+    """Point the lazy DB cache at a fresh temp database."""
+    monkeypatch.setattr(runtime, "_db", db)
     return db
 
 
@@ -30,19 +30,19 @@ def _seed(db, content):
 
 def test_appends_newline_when_missing(wired_db, capsys):
     _seed(wired_db, "no trailing newline")
-    main.emit_raw(None)
+    runtime.emit_raw(None)
     assert capsys.readouterr().out == "no trailing newline\n"
 
 
 def test_does_not_double_newline(wired_db, capsys):
     _seed(wired_db, "already terminated\n")
-    main.emit_raw(None)
+    runtime.emit_raw(None)
     assert capsys.readouterr().out == "already terminated\n"
 
 
 def test_empty_content_stays_empty(wired_db, capsys):
     _seed(wired_db, "")
-    main.emit_raw(None)
+    runtime.emit_raw(None)
     assert capsys.readouterr().out == ""
 
 
