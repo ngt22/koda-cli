@@ -90,11 +90,13 @@ def _run(tmp_path, db_path, *args):
 
 
 def test_remote_entry_refuses_without_confirmation(tmp_path):
-    """A source=remote entry must not execute unattended (no TTY to confirm)."""
+    """A source=remote entry must not execute unattended (no TTY to confirm),
+    and the message steers toward `koda edit` rather than habitual -f."""
     db_path = _seed_remote(tmp_path, "echo SHOULD_NOT_RUN")
     result = _run(tmp_path, db_path, "1")
     assert result.returncode != 0
     assert "SHOULD_NOT_RUN" not in result.stdout
+    assert "koda edit" in result.stderr
 
 
 def test_remote_entry_runs_with_force(tmp_path):
@@ -110,3 +112,21 @@ def test_local_entry_runs_without_prompt(tmp_path):
     result = _run_x(tmp_path, "echo LOCAL_OK")
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "LOCAL_OK"
+
+
+def test_remote_entry_runs_when_confirm_disabled(tmp_path):
+    """With exec.confirm_remote=false, a remote entry runs without prompting."""
+    db_path = _seed_remote(tmp_path, "echo OPTED_OUT")
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("[exec]\nconfirm_remote = false\n", encoding="utf-8")
+    env = _base_env(tmp_path, db_path)
+    env["KODA_CONFIG_PATH"] = str(config_path)
+    result = subprocess.run(
+        [sys.executable, "-c", "from koda.main import app; app()", "x", "1"],
+        capture_output=True,
+        text=True,
+        stdin=subprocess.DEVNULL,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "OPTED_OUT"

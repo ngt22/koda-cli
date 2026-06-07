@@ -735,16 +735,23 @@ koda pull   # git pull the clone, merge koda-sync.jsonl into local DB
 
 The sync remote is **outside your trust boundary**. Anyone who can write to it (a compromised account, a shared repo, a malicious collaborator) can change the body of any synced entry — including one bound to a shortcut you `exec`. To contain this:
 
-- **Entries arriving via `pull` are marked `source=remote`.** `koda exec`/`koda x` **prompts for confirmation before running a `source=remote` entry**, so a silently rewritten `deploy` snippet cannot execute unattended. Reviewing the entry with `koda edit` clears the flag back to `local`; `koda x -f/--force` skips the prompt (e.g. in trusted scripts).
+- **Entries arriving via `pull` are marked `source=remote`.** `koda exec`/`koda x` **prompts for confirmation before running a `source=remote` entry**, so a silently rewritten `deploy` snippet cannot execute unattended. The recommended way to trust an entry is to **review it with `koda edit <ref>`**, which clears the flag back to `local` permanently. `koda x -f/--force` runs it once without prompting — prefer `edit` over habitually reaching for `-f`, since an `-f` baked into an alias or script silently disables the check.
 - **Preview before you merge.** `koda pull --dry-run` shows the exact insert/update diff *without* touching the local database, so you can inspect incoming changes first.
 - **The `source` flag never crosses the wire.** It is local-only state and is not written to (or read from) `koda-sync.jsonl`, so a remote cannot label its own entries `local` to dodge the prompt.
 
 ```bash
-koda pull --dry-run   # show what would change, write nothing
-koda pull             # merge; new/updated entries become source=remote
-koda x deploy         # prompts because 'deploy' came from the remote
-koda x deploy -f      # run without prompting
+koda pull --dry-run     # show what would change, write nothing
+koda pull               # merge; new/updated entries become source=remote
+koda x deploy           # prompts because 'deploy' came from the remote
+koda edit deploy        # review it → trusted (source=local), no more prompts
+koda x deploy -f        # run once without prompting (does NOT clear the flag)
 ```
+
+> **Disabling the prompt** — if you fully trust your sync remote, set
+> `exec.confirm_remote = false` (or `koda config set exec.confirm_remote false`)
+> to turn the confirmation off. **This is a security downgrade**: a compromised
+> remote could then run arbitrary code via `koda x` with no confirmation. Leave
+> it `true` (the default) unless you control the remote end to end.
 
 ### Setting up a second machine
 
@@ -850,7 +857,7 @@ sync remote, the `KODA_*` environment variables, a hand-edited
 | Area | Risk | Mitigation |
 |---|---|---|
 | `exec` shell | A tampered `exec.shell` could redirect `koda x` to an arbitrary binary | `exec.shell` is restricted to an allowlist (`sh`, `bash`, `zsh`, `fish`) that must resolve to an absolute executable |
-| Git sync poisoning | A writable remote could rewrite the body of an `exec` entry | `pull`-merged entries are marked `source=remote` and **`koda x` prompts before running them**; `pull --dry-run` previews changes; the `source` flag is local-only and never synced. See [Remote trust boundary](#remote-trust-boundary) |
+| Git sync poisoning | A writable remote could rewrite the body of an `exec` entry | `pull`-merged entries are marked `source=remote` and **`koda x` prompts before running them** (review with `koda edit` to trust; `exec.confirm_remote=false` opts out, at the cost of the check); `pull --dry-run` previews changes; the `source` flag is local-only and never synced. See [Remote trust boundary](#remote-trust-boundary) |
 | uid collision | The old 7-char (28-bit) `uid` was collidable (~16k entries) / preimage-attackable, enabling sync poisoning | `uid` is 16 hex chars (64-bit); legacy short uids still resolve via prefix match |
 | `git.payload_file` | A relative path like `.git/hooks/post-merge` could overwrite a git hook that then executes | The validator and `push` reject any path with `..` or a `.git` component, or an absolute path |
 | `db.path` | `KODA_DB_PATH=~/.ssh/authorized_keys` could create files at an attacker-chosen location | A local `db.path` is restricted to `~/.local/share/koda` / `$XDG_DATA_HOME/koda`; `KODA_DB_PATH_OVERRIDE=1` is the explicit escape hatch for CI/tests |
