@@ -74,7 +74,9 @@ def exec_memo(
 
     Entries brought in by `koda pull` are marked source=remote and prompt for
     confirmation before running, since a compromised sync remote could rewrite
-    their body. Editing an entry locally clears the flag; -f skips the prompt.
+    their body. Review with `koda edit <ref>` to trust an entry permanently
+    (this clears the flag); -f runs it once without prompting. Set
+    exec.confirm_remote=false to disable the prompt entirely (not recommended).
     """
     if ref is None:
         stdin_refs = _read_stdin_refs()
@@ -85,10 +87,20 @@ def exec_memo(
 
     init_db()
     row = resolve_ref(ref)
-    if row.source == "remote" and not force:
+    if row.source == "remote" and not force and get_config().exec_confirm_remote:
         label = ref if ref is not None else f"[{row.idx}]"
+        review_hint = f"Review it with `koda edit {label}` to trust it (clears the flag)"
+        if not sys.stdin.isatty():
+            # No TTY to prompt on (cron, pipes, scripts). Steer toward review
+            # rather than habitual -f, which would defeat the safety check.
+            exit_error(
+                f"Refusing to exec {label}: synced from a remote (source=remote) and not "
+                f"reviewed locally. {review_hint}, or re-run with -f to execute now.",
+                style="yellow",
+            )
         if not confirm(
-            f"Entry {label} was synced from a remote and not reviewed locally. Execute anyway?"
+            f"Entry {label} was synced from a remote and not reviewed locally. "
+            f"{review_hint}. Execute now anyway?"
         ):
             exit_error("Aborted.", code=ExitCode.CANCELLED, style="yellow")
     content = _apply_vars(row.content.strip() if row.content else "", vars)

@@ -198,3 +198,25 @@ class TestExecShell:
     def test_empty_rejected(self):
         with pytest.raises(ValidationError):
             ConfigManager.validate("exec.shell", "")
+
+
+class TestExecConfirmRemote:
+    def test_default_is_true(self):
+        from koda.config import Config
+
+        assert Config().exec_confirm_remote is True
+
+    @pytest.mark.parametrize("raw,expected", [("false", False), ("0", False), ("true", True)])
+    def test_coerce_bool(self, raw, expected):
+        assert ConfigManager.coerce("exec.confirm_remote", raw) is expected
+
+    def test_coerce_invalid(self):
+        with pytest.raises(ValidationError):
+            ConfigManager.coerce("exec.confirm_remote", "maybe")
+
+    def test_present_in_config_example_template(self):
+        from koda.config import EXAMPLE_TEMPLATE
+
+        assert "confirm_remote" in EXAMPLE_TEMPLATE
+        # The security caveat is spelled out for users about to flip it.
+        assert "DISABLES" in EXAMPLE_TEMPLATE

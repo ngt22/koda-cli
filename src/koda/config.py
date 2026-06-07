@@ -80,6 +80,11 @@ EXAMPLE_TEMPLATE = (
     '# sync_format = "jsonl"                     # or KODA_GIT_SYNC_FORMAT\n\n'
     "# [exec]\n"
     '# shell = "sh"\n'
+    "# Prompt before running entries pulled from a remote (source=remote).\n"
+    "# Setting this false DISABLES that safety check — a compromised sync\n"
+    "# remote could then run code via `koda x` with no confirmation. Leave\n"
+    "# true unless you fully trust your sync remote.\n"
+    "# confirm_remote = true\n"
 )
 
 
@@ -176,6 +181,7 @@ class Config:
     git_payload_file: str = "koda-sync.jsonl"
     git_sync_format: str = GIT_SYNC_FORMAT_JSONL
     exec_shell: str = "sh"
+    exec_confirm_remote: bool = True
 
 
 def _dotkey(field_name: str) -> str:
@@ -249,6 +255,7 @@ _FIELD_SPECS: dict[str, FieldSpec] = {
         f"must be an installed shell ({', '.join(EXEC_SHELL_ALLOWLIST)}) "
         "resolvable to an absolute path",
     ),
+    "exec.confirm_remote": FieldSpec(bool),
 }
 
 ALL_KEYS: list[str] = list(_FIELD_SPECS.keys())
