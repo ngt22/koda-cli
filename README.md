@@ -34,19 +34,20 @@ A **text store** for the terminal. Save any text — commands, paths, templates,
 
 **Who it's for:** terminal-native developers, SREs, and DevOps folks who retype the same commands, paths, and templates across hosts.
 
-| | **koda** | pet | navi | nb | atuin |
-|---|:---:|:---:|:---:|:---:|:---:|
-| Primary purpose | text + command store | snippets | cheatsheets | notes/bookmarks | shell history |
-| Store arbitrary text | ✓ | ✓ | partial | ✓ | — |
-| Run entry as a command | ✓ | ✓ | ✓ | — | re-run history |
-| Fuzzy interactive pick | ✓ (fzf) | ✓ | ✓ (fzf) | partial | ✓ |
-| Variable substitution | ✓ (`${KEY}`/`$1`) | ✓ | ✓ | — | — |
-| Shortcut / index recall | ✓ | — | — | ✓ (ids) | — |
-| Cross-machine sync | ✓ (your Git repo) | ✓ (Gist/Git) | via files | ✓ (Git) | ✓ (server) |
-| Storage | SQLite | TOML | files | files/Git | SQLite |
-| JSON output | ✓ | — | — | partial | ✓ |
+koda sits between a snippet manager and a note tool: it keeps arbitrary text the way a note tool does, but every entry stays runnable the way a snippet manager's are — one store, recalled by index or name and executed in place.
 
-Comparisons are best-effort and reflect each tool's primary focus, not an exhaustive feature audit.
+**What koda gives you, at a glance:**
+
+| Capability | koda |
+|---|:---|
+| Store arbitrary text | ✓ |
+| Run any entry as a command | ✓ (`exec` / `pick`) |
+| Fuzzy interactive pick | ✓ (fzf) |
+| Variable substitution | ✓ (`${KEY}` / `$1`) |
+| Shortcut & index recall | ✓ |
+| Cross-machine sync | ✓ (your own Git repo) |
+| Storage | SQLite (or Turso) |
+| Shell-friendly output | ✓ (`raw`, `--json`) |
 
 ## Features
 
@@ -640,6 +641,7 @@ Priority order: **CLI flags > environment variables > config file > built-in def
 | `KODA_GIT_SYNC_PATH`    | Path to the local Git sync clone (overrides `git.sync_path`) |
 | `KODA_GIT_PAYLOAD_FILE` | JSONL file name inside the sync clone (overrides `git.payload_file`) |
 | `KODA_GIT_SYNC_FORMAT`  | Sync wire format — `jsonl` (overrides `git.sync_format`) |
+| `KODA_FZF_OPTS`         | Extra flags passed to `fzf` by `pick` (e.g. `--height 40% --layout reverse`) |
 | `EDITOR`                | Editor for `add`, `edit`, and `config edit` (default: `vim`) |
 
 ## Turso (remote database)
