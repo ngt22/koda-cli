@@ -3,7 +3,7 @@
 import json
 import shutil
 import subprocess
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from rich.console import Console
@@ -82,6 +82,19 @@ def parse_memo_datetime(s: str | None) -> datetime:
         return datetime.strptime(str(s).strip(), DATETIME_FMT)
     except ValueError:
         return datetime.min.replace(microsecond=0)
+
+
+# A remote modified_at this far beyond "now" is treated as untrusted. The merge
+# resolves conflicts last-writer-wins on modified_at, so a tampered payload can
+# post-date an entry far into the future to always win and silently overwrite a
+# local entry. Such entries are never allowed to overwrite local data (genuine
+# clock skew between machines stays well within this window).
+FUTURE_SKEW_ALLOWANCE = timedelta(hours=24)
+
+
+def is_future_dated(ts: datetime) -> bool:
+    """True if ``ts`` is implausibly far in the future (untrusted timestamp)."""
+    return ts > datetime.now() + FUTURE_SKEW_ALLOWANCE
 
 
 # ── JSONL payload (de)serialization ──────────────────────────────────────────
@@ -359,6 +372,18 @@ class MemoMerger:
             )
 
     @staticmethod
+    def _remote_overwrites_local(r_ts: datetime, l_ts: datetime) -> bool:
+        """Whether a remote entry should overwrite the local one it conflicts with.
+
+        Last-writer-wins on modified_at, except an implausibly future-dated
+        remote timestamp is rejected so a tampered payload cannot post-date an
+        entry to force an overwrite.
+        """
+        if r_ts <= l_ts:
+            return False
+        return not is_future_dated(r_ts)
+
+    @staticmethod
     def _sort_key(m: dict):
         return (
             parse_memo_datetime(m.get("modified_at")) or parse_memo_datetime(m.get("created_at")),
@@ -457,7 +482,7 @@ class MemoMerger:
 
                 memo_id = local_row[0]
                 l_ts = parse_memo_datetime(local_row[7]) or parse_memo_datetime(local_row[6])
-                if rec["r_ts"] <= l_ts:
+                if not self._remote_overwrites_local(rec["r_ts"], l_ts):
                     skipped += 1
                     continue
 
@@ -505,7 +530,9 @@ class MemoMerger:
                     action = "insert"
                 else:
                     l_ts = parse_memo_datetime(local_row[7]) or parse_memo_datetime(local_row[6])
-                    action = "update" if rec["r_ts"] > l_ts else "skip"
+                    action = (
+                        "update" if self._remote_overwrites_local(rec["r_ts"], l_ts) else "skip"
+                    )
                 out.append(
                     {
                         "action": action,

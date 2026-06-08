@@ -79,7 +79,7 @@ def _merge_payload(data: bytes) -> None:
     )
     console.print(
         f"merged memos: [cyan]{ins}[/cyan] inserted, [cyan]{upd}[/cyan] updated, "
-        f"[dim]{skp}[/dim] skipped (older or invalid entries){tail}."
+        f"[dim]{skp}[/dim] skipped (older, future-dated, or invalid entries){tail}."
     )
 
 
