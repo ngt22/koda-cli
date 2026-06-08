@@ -73,6 +73,8 @@ Comparisons are best-effort and reflect each tool's primary focus, not an exhaus
 
 ## In action
 
+![koda demo: save commands, list them, then run one by shortcut with a variable](assets/demo.gif)
+
 **Save a verbose command and run it by name:**
 
 ```bash
@@ -122,6 +124,8 @@ Single-letter aliases are reserved and cannot be used as entry shortcuts.
 | `-V` / `--var` | Variable substitution at recall time |
 
 ## Installation
+
+**Requirements:** Python 3.10+ on Linux or macOS. `fzf` is optional and only needed for the interactive `pick` command.
 
 ```bash
 # uv (recommended)
