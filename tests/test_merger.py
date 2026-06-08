@@ -69,6 +69,32 @@ def test_skip_entry_with_invalid_idx(db):
     assert (inserted, skipped) == (0, 1)
 
 
+def test_future_dated_remote_does_not_overwrite_local(db):
+    """A remote entry post-dated far into the future must not win LWW (spoofing)."""
+    db.add_memo("uid0001", 0, None, "trusted", "", "2026-01-01 00:00:00", "2026-01-01 00:00:00")
+    inserted, updated, skipped, _ = MemoMerger(db).merge(
+        [entry("uid0001", 0, content="evil", modified_at="2099-01-01 00:00:00")]
+    )
+    assert (inserted, updated, skipped) == (0, 0, 1)
+    assert db.get_memo_by_uid("uid0001").content == "trusted"
+
+
+def test_future_dated_skip_reported_in_plan(db):
+    db.add_memo("uid0001", 0, None, "trusted", "", "2026-01-01 00:00:00", "2026-01-01 00:00:00")
+    plan = MemoMerger(db).plan(
+        [entry("uid0001", 0, content="evil", modified_at="2099-01-01 00:00:00")]
+    )
+    assert [p["action"] for p in plan] == ["skip"]
+
+
+def test_future_dated_new_entry_still_inserts(db):
+    """A brand-new uid has no local entry to overwrite, so it is still inserted."""
+    inserted, _, skipped, _ = MemoMerger(db).merge(
+        [entry("uid0002", 0, content="new", modified_at="2099-01-01 00:00:00")]
+    )
+    assert (inserted, skipped) == (1, 0)
+
+
 def test_idx_conflict_resolved_to_next_idx(db):
     db.add_memo("uid0001", 0, None, "first", "", "2026-01-01 00:00:00", "2026-01-01 00:00:00")
     inserted, _, _, _ = MemoMerger(db).merge([entry("uid0002", 0, content="second")])

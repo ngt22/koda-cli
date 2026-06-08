@@ -10,7 +10,7 @@ from pathlib import Path
 import typer
 from rich.table import Table
 
-from ..cli_utils import confirm, exit_error
+from ..cli_utils import ExitCode, confirm, exit_error
 from ..cmd_helpers.display import print_memo as _print_memo
 from ..cmd_helpers.metadata import first_footer_index, last_footer_segment
 from ..cmd_helpers.parsing import parse_indices, parse_tag_args
@@ -37,6 +37,8 @@ def _generate_uid(content: str, created_at: str) -> str:
 
 
 def _validate_shortcut(shortcut: str | None) -> str | None:
+    if shortcut is not None and not shortcut.strip():
+        exit_error("Shortcut cannot be empty. Omit -s to save without one.")
     if shortcut and len(shortcut) == 1 and shortcut in RESERVED_SHORTCUTS:
         exit_error(f"Shortcut {shortcut!r} is reserved as a 1-letter subcommand alias.")
     return shortcut
@@ -104,8 +106,9 @@ def _add_impl(
     if print_idx:
         sys.stdout.write(str(new_idx) + "\n")
     if not quiet:
-        sc_str = f" sc=[bold green]{shortcut}[/bold green]" if shortcut else ""
-        console.print(f"[green]Saved [{new_idx}] ({uid}) tags: {formatted_tags}{sc_str}[/green]")
+        meta = f" | tags: {formatted_tags}" if formatted_tags else ""
+        meta += f" | sc=[bold green]{shortcut}[/bold green]" if shortcut else ""
+        console.print(f"[green]Saved [{new_idx}] ({uid}){meta}[/green]")
 
 
 @app.command()
@@ -188,8 +191,7 @@ def rm(
             console.print(f"  ... and {n - 10} more")
 
         if not force and not confirm(f"\nDelete {n} entr{'y' if n == 1 else 'ies'}?"):
-            console.print("[yellow]Cancelled.[/yellow]")
-            raise typer.Exit(code=0)
+            exit_error("Cancelled.", code=ExitCode.CANCELLED, style="yellow")
 
         ids = [row.id for row in target_rows]
         with get_db().connection() as conn:
@@ -203,8 +205,7 @@ def rm(
         console.print("\n[bold red]This entry will be deleted.[/bold red]")
 
         if not force and not confirm("Delete this entry?"):
-            console.print("[yellow]Cancelled.[/yellow]")
-            raise typer.Exit(code=0)
+            exit_error("Cancelled.", code=ExitCode.CANCELLED, style="yellow")
 
         get_db().delete_memo(row.id)
         preview = row.content.splitlines()[0][:50] if row.content else ""
@@ -406,8 +407,12 @@ def _list_memos_impl(
         desc=desc,
     )
     if not memos:
-        console.print("[yellow]No entries found.[/yellow]")
-        console.print("[dim]Total: 0 | Pages: 0 | Max IDX: -[/dim]")
+        if query or tag or exclude_tag or shortcuts_only:
+            console.print("[yellow]No entries found.[/yellow]")
+            console.print("[dim]Total: 0 | Pages: 0 | Max IDX: -[/dim]")
+        else:
+            console.print("[yellow]No entries yet.[/yellow]")
+            console.print('[dim]Get started:[/dim] koda add "your command or note here"')
         return
 
     table = Table(box=None, header_style="bold magenta", expand=True)
@@ -452,6 +457,8 @@ def _list_memos_impl(
         f"[dim]Total: {total_count} | Pages: {total_pages} | Max IDX: {max_idx} | "
         f"Rows: {rows_text} | Truncate: {truncate_text}[/dim]"
     )
+    if total_pages > 1 and page < total_pages:
+        console.print(f"[dim]Page {page}/{total_pages} — next: koda l -p {page + 1}[/dim]")
 
 
 @app.command(name="list")
@@ -565,7 +572,16 @@ def show(
     if json_output:
         sys.stdout.write(json.dumps(row.to_dict(), ensure_ascii=False, indent=2) + "\n")
         return
-    _print_memo(row.uid, row.idx, row.shortcut, row.content, row.tags, row.created_at)
+    _print_memo(
+        row.uid,
+        row.idx,
+        row.shortcut,
+        row.content,
+        row.tags,
+        row.created_at,
+        row.modified_at,
+        row.source,
+    )
 
 
 @app.command()

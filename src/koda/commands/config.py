@@ -10,7 +10,7 @@ import sys
 
 import typer
 
-from ..cli_utils import confirm, exit_error
+from ..cli_utils import ExitCode, confirm, exit_error
 from ..config import ALL_KEYS as _ALL_KEYS
 from ..config import CONFIG_PATH, EXAMPLE_TEMPLATE, ConfigManager, ValidationError
 from ..runtime import (
@@ -160,8 +160,7 @@ def config_reset(
         console.print("[yellow]No config file found.[/yellow]")
         return
     if not force and not confirm(f"Delete config file at {CONFIG_PATH}?"):
-        console.print("[yellow]Cancelled.[/yellow]")
-        raise typer.Exit(code=0)
+        exit_error("Cancelled.", code=ExitCode.CANCELLED, style="yellow")
     CONFIG_PATH.unlink()
     console.print(f"[green]Config reset (deleted {CONFIG_PATH}).[/green]")
 

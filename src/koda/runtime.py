@@ -18,7 +18,7 @@ from pathlib import Path
 import typer
 from rich.console import Console
 
-from .cli_utils import exit_error
+from .cli_utils import ExitCode, exit_error
 from .cmd_helpers.parsing import parse_var_items
 from .config import Config, ConfigManager, ValidationError, db_path_allowed
 from .db import DatabaseError, MemoDatabase
@@ -132,9 +132,9 @@ def init_db():
     except typer.Exit:
         raise
     except DatabaseError as e:
-        exit_error(str(e))
+        exit_error(str(e), code=ExitCode.DB_ERROR)
     except Exception as e:
-        exit_error(f"Database Error: {e}")
+        exit_error(f"Database Error: {e}", code=ExitCode.DB_ERROR)
 
 
 def resolve_ref(ref: str | None):
@@ -145,16 +145,16 @@ def resolve_ref(ref: str | None):
     if ref is None:
         row = get_db().get_latest_entry()
         if row is None:
-            exit_error("No entries in database.", style="yellow")
+            exit_error("No entries in database.", code=ExitCode.NOT_FOUND, style="yellow")
         return row
     if ref.isdigit():
         row = get_db().get_memo_by_idx(int(ref))
         if row is None:
-            exit_error(f"No entry at index {ref}.", style="yellow")
+            exit_error(f"No entry at index {ref}.", code=ExitCode.NOT_FOUND, style="yellow")
         return row
     row = get_db().get_memo_by_shortcut(ref)
     if row is None:
-        exit_error(f"No entry with shortcut {ref!r}.", style="yellow")
+        exit_error(f"No entry with shortcut {ref!r}.", code=ExitCode.NOT_FOUND, style="yellow")
     return row
 
 
