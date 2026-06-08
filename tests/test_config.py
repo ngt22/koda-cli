@@ -4,7 +4,7 @@ import shutil
 
 import pytest
 
-from koda.config import ConfigManager, ValidationError
+from koda.config import ConfigManager, ValidationError, toml_basic_string
 
 
 class TestCoerce:
@@ -198,6 +198,61 @@ class TestExecShell:
     def test_empty_rejected(self):
         with pytest.raises(ValidationError):
             ConfigManager.validate("exec.shell", "")
+
+
+class TestTomlBasicString:
+    @pytest.mark.parametrize(
+        "value,expected",
+        [
+            ("plain", '"plain"'),
+            ('he said "hi"', '"he said \\"hi\\""'),
+            ("a\\b", '"a\\\\b"'),
+            ("line1\nline2", '"line1\\nline2"'),
+            ("tab\there", '"tab\\there"'),
+        ],
+    )
+    def test_escapes(self, value, expected):
+        assert toml_basic_string(value) == expected
+
+    def test_control_char_uses_unicode_escape(self):
+        assert toml_basic_string("\x00") == '"\\u0000"'
+
+
+class TestWriteRawInjection:
+    """write_raw must not let a value break out of its string and inject keys."""
+
+    def _roundtrip(self, tmp_path, data):
+        import sys
+
+        if sys.version_info >= (3, 11):
+            import tomllib
+        else:
+            import tomli as tomllib
+
+        mgr = ConfigManager(config_path=tmp_path / "config.toml")
+        mgr.write_raw(data)
+        with open(mgr.config_path, "rb") as f:
+            return tomllib.load(f)
+
+    def test_token_with_quotes_and_newlines_roundtrips(self, tmp_path):
+        # A token crafted to inject `[exec] confirm_remote = false`.
+        evil = 'foo"\n\n[exec]\nconfirm_remote = false\n'
+        parsed = self._roundtrip(tmp_path, {"turso": {"token": evil}})
+        # The value survives verbatim and no injected table appears.
+        assert parsed == {"turso": {"token": evil}}
+        assert "exec" not in parsed
+
+    def test_backslash_value_roundtrips(self, tmp_path):
+        parsed = self._roundtrip(tmp_path, {"git": {"sync_path": "C:\\Users\\me"}})
+        assert parsed["git"]["sync_path"] == "C:\\Users\\me"
+
+    def test_list_items_with_quotes_roundtrip(self, tmp_path):
+        parsed = self._roundtrip(tmp_path, {"list": {"columns": ['id"x', "content"]}})
+        assert parsed["list"]["columns"] == ['id"x', "content"]
+
+    def test_bool_and_int_still_written_unquoted(self, tmp_path):
+        parsed = self._roundtrip(tmp_path, {"list": {"desc": True, "per_page": 20}})
+        assert parsed["list"] == {"desc": True, "per_page": 20}
 
 
 class TestExecConfirmRemote:

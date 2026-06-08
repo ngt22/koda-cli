@@ -150,6 +150,36 @@ def valid_exec_shell(v: Any) -> bool:
     return bool(resolved) and Path(resolved).is_absolute()
 
 
+_TOML_STR_ESCAPES = {
+    "\\": "\\\\",
+    '"': '\\"',
+    "\b": "\\b",
+    "\t": "\\t",
+    "\n": "\\n",
+    "\f": "\\f",
+    "\r": "\\r",
+}
+
+
+def toml_basic_string(value: str) -> str:
+    """Quote ``value`` as a TOML basic string with proper escaping.
+
+    Without this, a value containing ``"`` or a newline could break out of its
+    string and inject arbitrary TOML keys/tables when written back to the config
+    file (e.g. forcing ``exec.confirm_remote = false``). Escaping ``\\`` and
+    ``"`` plus all control characters closes that injection vector and keeps the
+    value round-trippable by ``tomllib``."""
+    out = []
+    for ch in value:
+        if ch in _TOML_STR_ESCAPES:
+            out.append(_TOML_STR_ESCAPES[ch])
+        elif ord(ch) < 0x20 or ord(ch) == 0x7F:
+            out.append(f"\\u{ord(ch):04X}")
+        else:
+            out.append(ch)
+    return '"' + "".join(out) + '"'
+
+
 class DefaultCmd(str, Enum):
     RAW = "raw"
     LIST = "list"
@@ -331,10 +361,10 @@ class ConfigManager:
                 if isinstance(v, bool):
                     lines.append(f"{k} = {'true' if v else 'false'}")
                 elif isinstance(v, list):
-                    items = ", ".join(f'"{c}"' for c in v)
+                    items = ", ".join(toml_basic_string(str(c)) for c in v)
                     lines.append(f"{k} = [{items}]")
                 elif isinstance(v, str):
-                    lines.append(f'{k} = "{v}"')
+                    lines.append(f"{k} = {toml_basic_string(v)}")
                 else:
                     lines.append(f"{k} = {v}")
             lines.append("")
