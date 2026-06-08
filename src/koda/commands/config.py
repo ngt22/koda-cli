@@ -6,8 +6,6 @@ with ``app.add_typer``. It must not import ``koda.main`` so that main can import
 """
 
 import json
-import os
-import subprocess
 import sys
 
 import typer
@@ -15,7 +13,13 @@ import typer
 from ..cli_utils import confirm, exit_error
 from ..config import ALL_KEYS as _ALL_KEYS
 from ..config import CONFIG_PATH, EXAMPLE_TEMPLATE, ConfigManager, ValidationError
-from ..runtime import console, get_config, get_config_manager, get_config_sources
+from ..runtime import (
+    console,
+    get_config,
+    get_config_manager,
+    get_config_sources,
+    launch_editor,
+)
 
 config_app = typer.Typer(
     name="config",
@@ -81,11 +85,22 @@ def config_show_cmd(
 @config_app.command("get")
 def config_get(
     key: str = typer.Argument(..., help="Config key (e.g. defaults.cmd)."),
+    reveal: bool = typer.Option(
+        False, "--reveal", help="Print secret values (e.g. turso.token) in clear text."
+    ),
 ) -> None:
-    """Print a single config value (plain text, for scripting)."""
+    """Print a single config value (plain text, for scripting).
+
+    Secret values such as ``turso.token`` are masked as ``****`` unless
+    ``--reveal`` is given, so the token does not leak into shell history,
+    CI logs, or terminal scrollback by accident.
+    """
     if key not in _ALL_KEYS:
         exit_error(f"Unknown key: {key!r}. Valid keys: {', '.join(sorted(_ALL_KEYS))}")
-    sys.stdout.write(str(ConfigManager.get(get_config(), key)) + "\n")
+    val = ConfigManager.get(get_config(), key)
+    if key == "turso.token" and val and not reveal:
+        val = "****"
+    sys.stdout.write(str(val) + "\n")
 
 
 @config_app.command("set")
@@ -157,8 +172,7 @@ def config_edit_cmd() -> None:
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     if not CONFIG_PATH.exists():
         CONFIG_PATH.write_text(EXAMPLE_TEMPLATE, encoding="utf-8")
-    editor = os.environ.get("EDITOR", "vim")
-    subprocess.call([editor, str(CONFIG_PATH)])
+    launch_editor(str(CONFIG_PATH))
 
 
 @config_app.command("path")

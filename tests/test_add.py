@@ -78,6 +78,6 @@ def test_no_arg_no_stdin_uses_editor(wired_db, monkeypatch):
         Path(cmd[1]).write_text("from editor")
         return 0
 
-    monkeypatch.setattr(memo.subprocess, "call", fake_call)
+    monkeypatch.setattr("koda.runtime.subprocess.call", fake_call)
     memo._add_impl(text=None)
     assert _latest_content(wired_db) == "from editor"
