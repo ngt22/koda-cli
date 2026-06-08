@@ -7,7 +7,10 @@ config read, no DB handle. Config and the database are resolved lazily on first
 use.
 """
 
+import os
 import re
+import shlex
+import subprocess
 import sys
 from importlib.metadata import version
 from pathlib import Path
@@ -95,6 +98,32 @@ def version_callback(value: bool):
     if value:
         console.print(f"{__app_name__} version: [bold cyan]{__version__}[/bold cyan]")
         raise typer.Exit()
+
+
+def resolve_editor() -> list[str]:
+    """Resolve ``$EDITOR`` to a command vector, falling back to ``vim``.
+
+    Handles an empty/whitespace ``EDITOR`` (which would otherwise try to exec
+    ``""`` and crash) and multi-word editors such as ``code --wait``.
+    """
+    raw = os.environ.get("EDITOR", "").strip() or "vim"
+    try:
+        parts = shlex.split(raw)
+    except ValueError:
+        parts = [raw]
+    return parts or ["vim"]
+
+
+def launch_editor(path: str) -> None:
+    """Open ``path`` in the user's editor, exiting cleanly if it cannot run."""
+    editor = resolve_editor()
+    try:
+        subprocess.call([*editor, path])
+    except OSError as e:
+        exit_error(
+            f"Could not launch editor {editor[0]!r}: {e}. "
+            "Set $EDITOR to a valid editor, e.g. `export EDITOR=nano`."
+        )
 
 
 def init_db():

@@ -1,9 +1,7 @@
 """Memo CRUD and display commands: add, remove, copy, edit, list, show, raw, tag."""
 
 import json
-import os
 import re
-import subprocess
 import sys
 import tempfile
 from datetime import datetime
@@ -29,6 +27,7 @@ from ..runtime import (
     get_config,
     get_db,
     init_db,
+    launch_editor,
     resolve_ref,
 )
 
@@ -70,11 +69,10 @@ def _add_impl(
     elif not sys.stdin.isatty():
         content = sys.stdin.read().strip()
     else:
-        editor = os.environ.get("EDITOR", "vim")
         with tempfile.NamedTemporaryFile(suffix=".tmp", mode="w+", delete=False) as tf:
             temp_path = tf.name
         try:
-            subprocess.call([editor, temp_path])
+            launch_editor(temp_path)
             with open(temp_path) as f:
                 content = f.read().strip()
         finally:
@@ -259,7 +257,6 @@ def edit(
         f"{content}\n\n---\n# Metadata\ntags: {tags}\n{sc_line}\ncreated_at: {created_at}\n---"
     )
 
-    editor = os.environ.get("EDITOR", "vim")
     with tempfile.NamedTemporaryFile(
         suffix=".tmp", mode="w+", delete=False, encoding="utf-8"
     ) as tf:
@@ -267,7 +264,7 @@ def edit(
         temp_path = tf.name
 
     try:
-        subprocess.call([editor, temp_path])
+        launch_editor(temp_path)
         with open(temp_path) as f:
             new_data = f.read()
 
