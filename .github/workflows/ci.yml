@@ -11,12 +11,17 @@ concurrency:
 
 jobs:
   test:
-    name: lint + test (Python ${{ matrix.python-version }})
-    runs-on: ubuntu-latest
+    name: lint + test (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest]
         python-version: ["3.10", "3.11", "3.12"]
+        include:
+          # Verify the CLI works on macOS too (single representative version).
+          - os: macos-latest
+            python-version: "3.12"
 
     steps:
       - uses: actions/checkout@v4
