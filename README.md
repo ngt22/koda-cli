@@ -129,26 +129,18 @@ Single-letter aliases are reserved and cannot be used as entry shortcuts.
 
 ```bash
 # uv (recommended)
-uv tool install koda-cli
+uv tool install "koda-cli @ git+https://github.com/ngt22/koda-cli.git"
 
 # pipx
-pipx install koda-cli
+pipx install "git+https://github.com/ngt22/koda-cli.git"
 ```
 
 Turso remote backend (optional):
 
 ```bash
-uv tool install "koda-cli[turso]"
+uv tool install "koda-cli[turso] @ git+https://github.com/ngt22/koda-cli.git"
 # or
-pipx install koda-cli --pip-args ".[turso]"
-```
-
-Install the latest unreleased code straight from GitHub:
-
-```bash
-uv tool install "koda-cli @ git+https://github.com/ngt22/koda-cli.git"
-# or
-pipx install "git+https://github.com/ngt22/koda-cli.git"
+pipx install "git+https://github.com/ngt22/koda-cli.git" --pip-args ".[turso]"
 ```
 
 ## Update
