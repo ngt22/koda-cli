@@ -37,6 +37,13 @@ class MemoRow:
         assert len(row) == 9, f"expected 9 columns, got {len(row)}"
         return cls(*row)
 
+    @classmethod
+    def from_rows(cls, rows) -> list["MemoRow"]:
+        """Materialize many guaranteed-non-null rows (e.g. a ``fetchall``
+        result). Unlike ``from_row`` the elements are never None, so the return
+        type is a plain ``list[MemoRow]``."""
+        return [cls(*row) for row in rows]
+
     def to_dict(self) -> dict[str, Any]:
         """JSON-serializable view of the row. ``tags`` is split into a list."""
         return {

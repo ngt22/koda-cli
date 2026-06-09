@@ -27,9 +27,10 @@ There is no Makefile; run the tools directly. CI runs exactly these on Python
 3.10/3.11/3.12, so green locally means green in CI.
 
 ```bash
-uv run pytest                 # tests (with coverage)
+uv run pytest                 # tests (with coverage; fails under 60%)
 uv run ruff check src tests   # lint
 uv run ruff format src tests  # auto-format (use --check to verify only)
+uv run mypy                   # static type check (config in pyproject.toml)
 ```
 
 Optionally install the pre-commit hooks so lint/format run on every commit:
@@ -62,6 +63,7 @@ Before opening a PR, make sure:
 
 - [ ] `uv run ruff check src tests` passes
 - [ ] `uv run ruff format --check src tests` passes
+- [ ] `uv run mypy` passes
 - [ ] `uv run pytest` passes
 - [ ] New behavior has tests
 - [ ] `CHANGELOG.md` has an entry under `## [Unreleased]` (see below)

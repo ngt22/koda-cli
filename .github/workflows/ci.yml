@@ -40,6 +40,9 @@ jobs:
       - name: Format check (ruff format)
         run: uv run ruff format --check src tests
 
+      - name: Type check (mypy)
+        run: uv run mypy
+
       - name: Import has no side effects (env-free)
         run: env -i "$PWD/.venv/bin/python" -c "import koda.main; print('import OK')"
 

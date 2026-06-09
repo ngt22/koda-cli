@@ -185,23 +185,20 @@ def pick(
             for ref in refs:
                 sys.stdout.write(ref + "\n")
             return
-        action = "raw" if raw_mode else "show"
+        pick_action = "raw" if raw_mode else "show"
         for ref in refs:
-            _run_pick_action(action, ref)
+            _run_pick_action(pick_action, ref)
         return
 
-    action: str | None = (
-        None
-        if print_id
-        else resolve_pick_action(get_config(), edit_mode, exec_mode, raw_mode, show_mode, print_id)
-    )
-
-    selected_ref = pick_with_fzf(candidates)
-    if selected_ref is None:
-        raise typer.Exit(code=0)
-
     if print_id:
+        selected_ref = pick_with_fzf(candidates)
+        if selected_ref is None:
+            raise typer.Exit(code=0)
         sys.stdout.write(selected_ref + "\n")
         return
 
+    action = resolve_pick_action(get_config(), edit_mode, exec_mode, raw_mode, show_mode, print_id)
+    selected_ref = pick_with_fzf(candidates)
+    if selected_ref is None:
+        raise typer.Exit(code=0)
     _run_pick_action(action, selected_ref)
