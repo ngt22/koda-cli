@@ -17,6 +17,8 @@ else:  # Python 3.10 has no stdlib tomllib; fall back to the tomli backport.
 
 from rich.console import Console
 
+from .db import VALID_SORT_COLUMNS
+
 console = Console()
 
 
@@ -28,16 +30,9 @@ DEFAULT_CONFIG_PATH = DEFAULT_CONFIG_DIR / "config.toml"
 CONFIG_PATH = Path(os.getenv("KODA_CONFIG_PATH", DEFAULT_CONFIG_PATH))
 
 
-VALID_SORT_COLUMNS = {
-    "id",
-    "idx",
-    "uid",
-    "tags",
-    "content",
-    "created_at",
-    "modified_at",
-    "shortcut",
-}
+# VALID_SORT_COLUMNS is owned by db.py (it lists the DB columns that may appear
+# in an ORDER BY); re-exported here so config validators and callers that import
+# from koda.config keep working without reaching into the db layer.
 VALID_LIST_COLUMNS = ["idx", "uid", "sc", "tags", "content", "created_at"]
 REQUIRED_LIST_COLUMNS = {"idx"}
 
@@ -147,7 +142,7 @@ def valid_exec_shell(v: Any) -> bool:
     if Path(v).name not in EXEC_SHELL_ALLOWLIST:
         return False
     resolved = shutil.which(v)
-    return bool(resolved) and Path(resolved).is_absolute()
+    return resolved is not None and Path(resolved).is_absolute()
 
 
 _TOML_STR_ESCAPES = {

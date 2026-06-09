@@ -15,7 +15,7 @@ def move(
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Show what would change without modifying the database."
     ),
-    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress the success message."),
+    quiet: bool = typer.Option(False, "--quiet", help="Suppress the success message."),
 ):
     """Move entry at FROM to an unoccupied display position TO. Alias: `koda m`."""
     init_db()
@@ -94,7 +94,7 @@ def shift_cmd(
 def swap(
     idx1: int = typer.Argument(..., help="First display index."),
     idx2: int = typer.Argument(..., help="Second display index."),
-    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress the success message."),
+    quiet: bool = typer.Option(False, "--quiet", help="Suppress the success message."),
 ):
     """Swap the display positions of two entries. Alias: `koda w`."""
     init_db()
@@ -107,8 +107,13 @@ def swap(
             exit_error(f"No entry at index {idx1}.")
         if b is None:
             exit_error(f"No entry at index {idx2}.")
-        # Use -1 as temp to avoid UNIQUE constraint conflict
-        conn.execute("UPDATE memos SET idx = -1 WHERE id = ?", (a[0],))
+        # Park one row at a temp idx that cannot collide with any real entry
+        # while we swap. A hardcoded sentinel (e.g. -1) breaks when an entry
+        # already sits there (reachable via `koda move 0 -1`), so derive the
+        # temp from MAX(idx) + IDX_TEMP_OFFSET like the bulk reindex ops.
+        max_idx = conn.execute("SELECT MAX(idx) FROM memos").fetchone()[0] or 0
+        temp_idx = max_idx + IDX_TEMP_OFFSET
+        conn.execute("UPDATE memos SET idx = ? WHERE id = ?", (temp_idx, a[0]))
         conn.execute("UPDATE memos SET idx = ? WHERE id = ?", (idx1, b[0]))
         conn.execute("UPDATE memos SET idx = ? WHERE id = ?", (idx2, a[0]))
     if not quiet:

@@ -17,7 +17,7 @@ from ..cmd_helpers.parsing import parse_indices, parse_tag_args
 from ..config import COLUMN_DEFS, VALID_LIST_COLUMNS, VALID_SORT_COLUMNS
 from ..constants import DATETIME_FMT, TAG_SEPARATOR
 from ..db import IntegrityErrors as _IntegrityErrors
-from ..db import MemoDatabase, compute_uid
+from ..db import compute_uid
 from ..main import RESERVED_SHORTCUTS, app
 from ..runtime import (
     _read_stdin_refs,
@@ -90,14 +90,7 @@ def _add_impl(
     now = datetime.now().strftime(DATETIME_FMT)
     uid = _generate_uid(content, now)
     try:
-        with get_db().connection() as conn:
-            new_idx = MemoDatabase.next_idx(conn)
-            conn.execute(
-                "INSERT INTO memos "
-                "(uid, idx, shortcut, content, tags, created_at, modified_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (uid, new_idx, shortcut or None, content, formatted_tags, now, now),
-            )
+        new_idx = get_db().add_memo_auto_idx(uid, shortcut, content, formatted_tags, now, now)
     except _IntegrityErrors:
         exit_error(f"Shortcut {shortcut!r} is already in use.")
 
@@ -123,7 +116,7 @@ def add(
         None, "--shortcut", "-s", help="Short alias for this entry (e.g. 'deploy')."
     ),
     quiet: bool = typer.Option(
-        False, "--quiet", "-q", help="Suppress the success message (for scripting)."
+        False, "--quiet", help="Suppress the success message (for scripting)."
     ),
     print_uid: bool = typer.Option(
         False, "--print-uid", help="Print the new entry's uid to stdout."
@@ -223,14 +216,7 @@ def copy(
     row = resolve_ref(ref)
     now = datetime.now().strftime(DATETIME_FMT)
     new_uid = _generate_uid(row.content or "", now)
-    with get_db().connection() as conn:
-        new_idx = MemoDatabase.next_idx(conn)
-        conn.execute(
-            "INSERT INTO memos "
-            "(uid, idx, shortcut, content, tags, created_at, modified_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (new_uid, new_idx, None, row.content, row.tags, now, now),
-        )
+    new_idx = get_db().add_memo_auto_idx(new_uid, None, row.content, row.tags, now, now)
     console.print(f"[green]Copied [{row.idx}] → [{new_idx}] ({new_uid}).[/green]")
 
 
@@ -239,7 +225,7 @@ def edit(
     ref: str | None = typer.Argument(
         None, help="Entry index or shortcut to edit (default: latest)."
     ),
-    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress the success message."),
+    quiet: bool = typer.Option(False, "--quiet", help="Suppress the success message."),
 ):
     """Open an entry in $EDITOR (body plus tags/shortcut/metadata footer). Alias: `koda e`."""
     init_db()
@@ -629,7 +615,7 @@ def tag(
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Show what would change without modifying the database."
     ),
-    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress the success message."),
+    quiet: bool = typer.Option(False, "--quiet", help="Suppress the success message."),
 ):
     """Add or remove tags on one or more entries. Supports ranges (e.g. 2-5). Alias: `koda t`."""
     if not tags and not untag:

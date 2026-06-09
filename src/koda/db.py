@@ -244,7 +244,7 @@ class MemoDatabase:
             sql += " LIMIT ? OFFSET ?"
             params = params + (limit, offset)
         with self.connection() as conn:
-            return [MemoRow.from_row(r) for r in conn.execute(sql, params).fetchall()]
+            return MemoRow.from_rows(conn.execute(sql, params).fetchall())
 
     def get_memo_stats(self, query=None, tag=None, exclude_tag=None, shortcuts_only=False):
         where_sql, params = self._filters(query, tag, exclude_tag, shortcuts_only)
@@ -322,6 +322,29 @@ class MemoDatabase:
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (uid, idx, shortcut or None, content, tags, created_at, modified_at),
             )
+
+    def add_memo_auto_idx(
+        self,
+        uid: str,
+        shortcut: str | None,
+        content: str,
+        tags: str,
+        created_at: str,
+        modified_at: str,
+    ) -> int:
+        """Insert a memo at the next free display index, allocated atomically in
+        the same transaction, and return that idx. Raises ``IntegrityErrors`` on
+        a shortcut clash so callers can report it. Centralizes the INSERT that
+        ``add`` and ``copy`` previously inlined."""
+        with self.connection() as conn:
+            new_idx = self.next_idx(conn)
+            conn.execute(
+                "INSERT INTO memos "
+                "(uid, idx, shortcut, content, tags, created_at, modified_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (uid, new_idx, shortcut or None, content, tags, created_at, modified_at),
+            )
+        return new_idx
 
     def update_memo(
         self,

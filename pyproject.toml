@@ -30,7 +30,7 @@ dependencies = [
 turso = ["libsql-experimental>=0.0.1"]
 
 [dependency-groups]
-dev = ["pytest", "pytest-cov", "ruff"]
+dev = ["pytest", "pytest-cov", "ruff", "mypy"]
 
 [project.urls]
 Homepage = "https://github.com/ngt22/koda-cli"
@@ -52,7 +52,18 @@ build-backend = "hatchling.build"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "--cov=koda --cov-report=term-missing"
+# --cov-fail-under guards against large coverage regressions; the floor sits a
+# few points below the current total so routine churn doesn't trip CI.
+addopts = "--cov=koda --cov-report=term-missing --cov-fail-under=60"
+
+[tool.mypy]
+files = ["src/koda"]
+# src/ layout: tell mypy the package root so relative imports resolve.
+explicit_package_bases = true
+namespace_packages = true
+mypy_path = "src"
+# Third-party deps (libsql_experimental, typer internals) ship no stubs.
+ignore_missing_imports = true
 
 [tool.ruff]
 line-length = 100

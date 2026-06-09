@@ -8,12 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `SECURITY.md` (vulnerability reporting policy) and `CODE_OF_CONDUCT.md`
+  (Contributor Covenant) for the project.
+- CI now runs `mypy` static type checking, and `pytest` enforces a 60% coverage
+  floor (`--cov-fail-under`).
 - `--json` output for `list`, `show`, and `config` for scripting (jq-friendly).
 - `koda list <idx|shortcut>` is now shorthand for `koda show <idx|shortcut>`
   instead of erroring on an unexpected argument.
 - `--dry-run` on `compact`, `shift`, `move`, and `tag` previews changes
   without modifying the database.
-- `--quiet/-q` on `add`, `edit`, `tag`, `move`, and `swap` suppresses the
+- `--quiet` on `add`, `copy`, `tag`, `move`, and `swap` suppresses the
   success message; `add --print-uid` / `add --print-idx` print the new
   entry's uid / idx to stdout for pipelines.
 - `koda export [--out PATH]` writes all entries as JSON Lines to stdout or a
@@ -27,6 +31,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   via the `KODA_FZF_OPTS` environment variable.
 - `koda config show` as an explicit subcommand, equivalent to bare
   `koda config`.
+
+### Changed
+- `-q` is now exclusively the short flag for `--query` (substring search) on
+  `list`, `remove`, and `pick`. The `--quiet` flag on `add`/`copy`/`tag`/`move`/
+  `swap` no longer has a `-q` short alias — spell out `--quiet`. This removes the
+  ambiguity of `-q` meaning different things on different commands.
+
+### Fixed
+- `swap` no longer fails with a UNIQUE-constraint error when one of the entries
+  sits at display index `-1` (the temporary index is now derived from the table
+  rather than a hardcoded `-1` sentinel).
 
 ## [1.2.0] - 2026-06-06
 
