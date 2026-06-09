@@ -22,7 +22,7 @@ def _base_env(tmp_path, db_path):
     return env
 
 
-def _run_x(tmp_path, body):
+def _run_x(tmp_path, body, extra=()):
     db_path = tmp_path / "exec.db"
     seed = MemoDatabase(backend="local", path=db_path)
     seed.init_db()
@@ -36,7 +36,7 @@ def _run_x(tmp_path, body):
         modified_at="2026-01-01 00:00:00",
     )
     return subprocess.run(
-        [sys.executable, "-c", "from koda.main import app; app()", "x"],
+        [sys.executable, "-c", "from koda.main import app; app()", "x", *extra],
         capture_output=True,
         text=True,
         stdin=subprocess.DEVNULL,
@@ -130,3 +130,28 @@ def test_remote_entry_runs_when_confirm_disabled(tmp_path):
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "OPTED_OUT"
+
+
+def test_dry_run_prints_command_without_executing(tmp_path):
+    """--dry-run prints the resolved command and must NOT run it."""
+    result = _run_x(tmp_path, "echo SHOULD_NOT_EXECUTE", extra=("-n",))
+    assert result.returncode == 0, result.stderr
+    assert "SHOULD_NOT_EXECUTE" in result.stdout  # echoed as the command text...
+    assert result.stdout.startswith("sh -c ")  # ...as `sh -c '...'`, not run
+    assert result.stdout.rstrip().endswith("'echo SHOULD_NOT_EXECUTE'")
+
+
+def test_dry_run_substitutes_variables(tmp_path):
+    """Variables are expanded in the previewed command, same as a real run."""
+    result = _run_x(tmp_path, "echo $1", extra=("-n", "-V", "world"))
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.rstrip().endswith("'echo world'")
+
+
+def test_dry_run_on_remote_entry_does_not_prompt(tmp_path):
+    """A source=remote entry can be previewed safely: no refusal, no execution."""
+    db_path = _seed_remote(tmp_path, "echo REMOTE_BODY")
+    result = _run(tmp_path, db_path, "1", "-n")
+    assert result.returncode == 0, result.stderr
+    assert "koda edit" not in result.stderr  # not the refusal path
+    assert result.stdout.rstrip().endswith("'echo REMOTE_BODY'")
