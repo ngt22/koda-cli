@@ -39,7 +39,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ambiguity of `-q` meaning different things on different commands.
 - `koda --help` now groups commands into labeled sections (Core, Git sync, Data,
   Index, Config) instead of one flat list, making the `push`/`pull` sync
-  commands and the data/index commands easier to discover.
+  commands and the data/index commands easier to discover. The README subcommand
+  quick reference is grouped to match.
 
 ### Fixed
 - `swap` no longer fails with a UNIQUE-constraint error when one of the entries

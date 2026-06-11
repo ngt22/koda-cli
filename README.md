@@ -94,25 +94,53 @@ koda p -x       # or pick interactively with fzf and execute
 
 ### Subcommands
 
+Grouped the same way as `koda --help`.
+
+**Core**
+
 | Command | Alias | Description |
 |---|---|---|
 | [`add`](#add) | `a` | Save a new entry |
-| [`raw`](#raw--body-only-output) | `r` | Print entry body to stdout |
-| [`list`](#list) | `l` | List and filter entries |
-| [`exec`](#execute-exec--run-a-saved-command) | `x` | Run a saved entry as a shell command |
-| [`edit`](#edit) | `e` | Open entry in `$EDITOR` |
-| [`pick`](#pick--interactive-launcher-fzf) | `p` | Interactive selector (requires fzf) |
-| [`show`](#show) | `s` | Display entry with full metadata |
 | [`remove`](#remove) | `d` | Delete entries |
 | [`copy`](#copy) | `c` | Duplicate an entry |
+| [`edit`](#edit) | `e` | Open entry in `$EDITOR` |
+| [`list`](#list) | `l` | List and filter entries |
+| [`show`](#show) | `s` | Display entry with full metadata |
+| [`raw`](#raw--body-only-output) | `r` | Print entry body to stdout |
 | [`tag`](#tag) | `t` | Batch-add or remove tags |
-| [`move`](#reorder-entries-move-swap-shift-compact) | `m` | Move entry to a display index |
-| [`swap`](#reorder-entries-move-swap-shift-compact) | `w` | Swap display positions of two entries |
-| [`shift`](#reorder-entries-move-swap-shift-compact) | `h` | Shift entries up or down by N |
-| [`compact`](#reorder-entries-move-swap-shift-compact) | `k` | Reassign indices to 0..n-1 |
-| [`config`](#configuration-config) | `g` | Read/write configuration |
+| [`exec`](#execute-exec--run-a-saved-command) | `x` | Run a saved entry as a shell command |
+| [`pick`](#pick--interactive-launcher-fzf) | `p` | Interactive selector (requires fzf) |
+
+**Git sync**
+
+| Command | Alias | Description |
+|---|---|---|
 | [`push`](#push-and-pull) | — | Export DB to Git sync repo and push |
 | [`pull`](#push-and-pull) | — | Pull Git sync repo and merge into local DB |
+
+**Data**
+
+| Command | Alias | Description |
+|---|---|---|
+| `export` | — | Write all entries as JSON Lines to stdout or a file |
+| `import` | — | Merge a JSONL file into the local database |
+| `diff` | — | Show a uid-level diff against the remote payload |
+| `backup` | — | Write a single-file SQLite snapshot (`VACUUM INTO`) |
+
+**Index**
+
+| Command | Alias | Description |
+|---|---|---|
+| [`move`](#reorder-entries-move-swap-shift-compact) | `m` | Move entry to a display index |
+| [`shift`](#reorder-entries-move-swap-shift-compact) | `h` | Shift entries up or down by N |
+| [`swap`](#reorder-entries-move-swap-shift-compact) | `w` | Swap display positions of two entries |
+| [`compact`](#reorder-entries-move-swap-shift-compact) | `k` | Reassign indices to 0..n-1 |
+
+**Config**
+
+| Command | Alias | Description |
+|---|---|---|
+| [`config`](#configuration-config) | `g` | Read/write configuration |
 
 Single-letter aliases are reserved and cannot be used as entry shortcuts.
 
