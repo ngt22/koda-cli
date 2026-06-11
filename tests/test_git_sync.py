@@ -51,6 +51,7 @@ def test_dump_load_round_trip(db):
             "tags": "",
             "created_at": "2026-01-01 00:00:00",
             "modified_at": "2026-01-01 00:00:00",
+            "title": None,
         },
         {
             "uid": "uid0002",
@@ -60,6 +61,7 @@ def test_dump_load_round_trip(db):
             "tags": "work",
             "created_at": "2026-01-02 00:00:00",
             "modified_at": "2026-01-02 00:00:00",
+            "title": None,
         },
     ]
 
@@ -130,3 +132,52 @@ class TestParseRecordDefaults:
     def test_idx_coerced_from_numeric_string(self):
         rec = GitSyncPayload.parse_record({"uid": "uid0001", "idx": "5"}, 1)
         assert rec["idx"] == 5
+
+    def test_missing_title_becomes_none(self):
+        # Legacy payload from an old peer: no 'title' field → None (backward compat).
+        rec = GitSyncPayload.parse_record({"uid": "uid0001", "idx": 0}, 1)
+        assert rec["title"] is None
+
+    def test_empty_title_becomes_none(self):
+        rec = GitSyncPayload.parse_record({"uid": "uid0001", "idx": 0, "title": ""}, 1)
+        assert rec["title"] is None
+
+    def test_title_preserved(self):
+        rec = GitSyncPayload.parse_record({"uid": "uid0001", "idx": 0, "title": "Deploy"}, 1)
+        assert rec["title"] == "Deploy"
+
+
+def test_dump_emits_title(db):
+    db.add_memo(
+        "uid0001", 0, None, "first", "", "2026-01-01 00:00:00", "2026-01-01 00:00:00", title="Hello"
+    )
+    line = GitSyncPayload.dump(db).decode().strip()
+    assert json.loads(line)["title"] == "Hello"
+
+
+def test_dump_emits_null_title_when_unset(db):
+    db.add_memo("uid0001", 0, None, "first", "", "2026-01-01 00:00:00", "2026-01-01 00:00:00")
+    line = GitSyncPayload.dump(db).decode().strip()
+    assert json.loads(line)["title"] is None
+
+
+def test_dump_load_round_trip_with_title(db):
+    db.add_memo(
+        "uid0001",
+        0,
+        None,
+        "first",
+        "",
+        "2026-01-01 00:00:00",
+        "2026-01-01 00:00:00",
+        title="My Title",
+    )
+    loaded = GitSyncPayload.load(GitSyncPayload.dump(db))
+    assert loaded[0]["title"] == "My Title"
+
+
+def test_legacy_payload_line_without_title_parses():
+    # A line emitted by a pre-title peer has no 'title' key at all.
+    data = b'{"uid":"uid0001","idx":0,"content":"x"}\n'
+    loaded = GitSyncPayload.load(data)
+    assert loaded[0]["title"] is None
