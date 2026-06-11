@@ -294,10 +294,23 @@ koda l -n 50 -p 2              # 50 entries per page, page 2
 koda l -s created_at --desc     # sort by creation date descending
 koda l --columns idx,uid,sc,tags,content,created_at   # all columns
 koda l --columns idx,content    # minimal view
+koda l -d body                  # show body preview in content column
+koda l -d title                 # show title (falls back to body preview if unset)
+koda l -d full                  # show entire body, ignoring rows/truncate
+koda l -d both                  # bold title line + body preview below
 ```
 
-Default columns: `IDX`, `SC`, `Tags`, `Content`. Available columns: `idx`, `uid`, `sc`, `tags`, `content`, `created_at` (`idx` is required).
+Default columns: `IDX`, `SC`, `Tags`, `Content`. Available columns: `idx`, `uid`, `sc`, `tags`, `title`, `content`, `created_at` (`idx` is required).
 Sort columns: `id`, `idx`, `uid`, `tags`, `content`, `created_at`, `modified_at`, `shortcut`.
+
+**Display modes (`--display` / `-d`):** Control what the Content column cell shows.
+
+| Mode | Content cell |
+|---|---|
+| `title` | Entry title; falls back to body preview when title is unset (default) |
+| `body` | Body preview, respecting `--rows` and `--truncate` (original behaviour) |
+| `full` | Full body — all lines, no truncation |
+| `both` | Bold title line followed by body preview; without a title, just the body preview |
 
 ---
 
@@ -687,7 +700,8 @@ rows = 1          # content preview lines (0 = all)
 truncate = 80     # max chars per line (0 = no truncation)
 sort_by = "idx"   # default sort column
 desc = false      # sort direction
-columns = ["idx", "sc", "tags", "content"]   # idx is required; available: idx, uid, sc, tags, content, created_at
+columns = ["idx", "sc", "tags", "content"]   # idx is required; available: idx, uid, sc, tags, title, content, created_at
+display = "title" # content column mode: title | body | full | both
 
 [db]
 path = "~/.local/share/koda/koda.db"

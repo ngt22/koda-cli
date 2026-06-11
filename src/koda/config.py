@@ -33,7 +33,7 @@ CONFIG_PATH = Path(os.getenv("KODA_CONFIG_PATH", DEFAULT_CONFIG_PATH))
 # VALID_SORT_COLUMNS is owned by db.py (it lists the DB columns that may appear
 # in an ORDER BY); re-exported here so config validators and callers that import
 # from koda.config keep working without reaching into the db layer.
-VALID_LIST_COLUMNS = ["idx", "uid", "sc", "tags", "content", "created_at"]
+VALID_LIST_COLUMNS = ["idx", "uid", "sc", "tags", "title", "content", "created_at"]
 REQUIRED_LIST_COLUMNS = {"idx"}
 
 COLUMN_DEFS: dict = {
@@ -41,6 +41,7 @@ COLUMN_DEFS: dict = {
     "uid": ("UID", {"width": 16, "style": "dim"}),
     "sc": ("SC", {"width": 10, "style": "bold green"}),
     "tags": ("Tags", {"style": "magenta", "width": 15}),
+    "title": ("Title", {"style": "bold", "ratio": 1}),
     "content": ("Content", {"ratio": 1}),
     "created_at": ("Created At", {"width": 19}),
 }
@@ -62,7 +63,8 @@ EXAMPLE_TEMPLATE = (
     "# rows = 1         # 0 = all lines\n"
     "# truncate = 80    # 0 = no truncation\n"
     '# sort_by = "idx"\n'
-    "# desc = false\n\n"
+    "# desc = false\n"
+    '# display = "title"   # title | body | full | both\n\n'
     "# [db]\n"
     f'# path = "{DEFAULT_DB_PATH}"\n'
     '# backend = "local"   # "local" or "turso"\n\n'
@@ -198,6 +200,7 @@ class Config:
     list_sort_by: str = "idx"
     list_desc: bool = False
     list_columns: list[str] = field(default_factory=lambda: ["idx", "sc", "tags", "content"])
+    list_display: str = "title"
     db_path: str = str(DEFAULT_DB_PATH)
     db_backend: str = "local"
     turso_url: str = ""
@@ -249,6 +252,11 @@ _FIELD_SPECS: dict[str, FieldSpec] = {
             and REQUIRED_LIST_COLUMNS.issubset(v)
         ),
         f'must include "idx"; available: {", ".join(VALID_LIST_COLUMNS)}',
+    ),
+    "list.display": FieldSpec(
+        str,
+        lambda v: v in ("title", "body", "full", "both"),
+        "must be one of: title, body, full, both",
     ),
     "db.path": FieldSpec(
         str,
