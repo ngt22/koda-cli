@@ -195,3 +195,74 @@ def test_dry_run_reads_ref_from_stdin(tmp_path):
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.rstrip().endswith("'echo FROM_STDIN'")
+
+
+# --- Trailing args: appended when the body has no placeholder, or used to fill
+# --- $1/"$@"/${1:-default} when it does (the seeded entry is at idx 1). ---
+
+
+def test_no_trailing_args_runs_base_command(tmp_path):
+    """With no extra args the body runs exactly as written (back-compat)."""
+    result = _run_x(tmp_path, "echo BASE", extra=("1",))
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "BASE"
+
+
+def test_trailing_arg_appended_when_body_has_no_placeholder(tmp_path):
+    """`koda x dcu a b` appends the args at the end, like a shell alias."""
+    result = _run_x(tmp_path, "echo BASE", extra=("1", "x1", "x2"))
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "BASE x1 x2"
+
+
+def test_trailing_arg_fills_positional_reference(tmp_path):
+    """When the body uses $1, the trailing arg fills it (no append)."""
+    result = _run_x(tmp_path, "echo logs-$1", extra=("1", "mypod"))
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "logs-mypod"
+
+
+def test_shell_default_value_used_when_no_arg(tmp_path):
+    """`${1:-default}` yields the default when no trailing arg is given."""
+    result = _run_x(tmp_path, "echo Hello ${1:-world}", extra=("1",))
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "Hello world"
+
+
+def test_shell_default_value_overridden_by_arg(tmp_path):
+    """A trailing arg overrides the `${1:-default}` fallback."""
+    result = _run_x(tmp_path, "echo Hello ${1:-world}", extra=("1", "Alice"))
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "Hello Alice"
+
+
+def test_trailing_args_preserve_word_boundaries(tmp_path):
+    """Args are real shell positionals, so spaces in a value stay one word."""
+    result = _run_x(tmp_path, 'printf "[%s]\\n" "$@"', extra=("1", "a b", "c"))
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["[a b]", "[c]"]
+
+
+def test_dry_run_shows_appended_positional_args(tmp_path):
+    """--dry-run renders the real argv, including the appended `"$@"` tail."""
+    result = _run_x(tmp_path, "docker compose up -d", extra=("1", "-n", "svc"))
+    assert result.returncode == 0, result.stderr
+    out = result.stdout.strip()
+    assert " -c 'docker compose up -d \"$@\"' " in out
+    assert out.endswith(" svc")
+
+
+def test_trailing_option_like_args_via_double_dash(tmp_path):
+    """`--` lets args that look like options pass through to the command."""
+    result = _run_x(tmp_path, "docker compose up -d", extra=("1", "-n", "--", "--build"))
+    assert result.returncode == 0, result.stderr
+    out = result.stdout.strip()
+    assert '"$@"' in out
+    assert out.endswith(" --build")
+
+
+def test_trailing_unknown_option_passes_through(tmp_path):
+    """Unknown options are forwarded to the command, not rejected by koda."""
+    result = _run_x(tmp_path, "docker compose up -d", extra=("1", "--build", "-n"))
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip().endswith(" --build")

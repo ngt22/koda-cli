@@ -1,6 +1,7 @@
 """Execution and interactive-selection commands: exec, pick."""
 
 import os
+import re
 import shlex
 import sys
 
@@ -27,6 +28,21 @@ from ..runtime import (
 )
 from . import memo  # bound as a module to avoid a circular import at load time
 
+# Matches a shell positional-parameter reference: $1..$9, $0, $@, $*, $#, and the
+# braced forms ${1...}, ${@}, ${*}, ${#}. Deliberately does NOT match koda's own
+# ${KEY} named placeholders (a letter after the brace), so a body that only uses
+# ${KEY} still gets trailing args appended rather than swallowed.
+_POSITIONAL_REF_RE = re.compile(r"\$(?:\d|[@*#]|\{\s*[\d@*#])")
+
+
+def _references_positionals(body: str) -> bool:
+    """True if the shell body already consumes positional params ($1, $@, ...).
+
+    Decides whether trailing CLI args are appended as `"$@"` (body ignores them)
+    or left for the body to pick up itself (body uses $1/$@/${1:-default}/...).
+    """
+    return bool(_POSITIONAL_REF_RE.search(body))
+
 
 def _run_pick_action(action: str, ref: str) -> None:
     if action == "raw":
@@ -46,10 +62,22 @@ def _run_pick_action(action: str, ref: str) -> None:
     exit_error(f"Unsupported pick action: {action}")
 
 
-@app.command(name="exec", rich_help_panel="Core")
+@app.command(
+    name="exec",
+    rich_help_panel="Core",
+    context_settings={"ignore_unknown_options": True, "help_option_names": ["-h", "--help"]},
+)
 def exec_memo(
     ref: str | None = typer.Argument(
         None, help="Entry index or shortcut to execute (default: latest)."
+    ),
+    extra: list[str] | None = typer.Argument(
+        None,
+        help=(
+            "Extra args passed to the command: appended at the end (like a shell "
+            'alias) or used to fill $1, $2, "$@" if the body references them. '
+            "Put -- before args that look like options."
+        ),
     ),
     vars: list[str] | None = typer.Option(
         None,
@@ -79,6 +107,12 @@ def exec_memo(
 
     When no argument is given, this command also accepts one ref from stdin.
 
+    Extra arguments after the ref are passed to the command. If the body does not
+    use them they are appended at the end (e.g. `koda x dcu llama-server` runs
+    `docker compose up -d llama-server`); if the body references `$1`/`"$@"` they
+    fill those, and `${1:-default}` supplies a fallback when none are passed. Put
+    `--` before args that look like options (`koda x dcu -- --build`).
+
     Entries brought in by `koda pull` are marked source=remote and prompt for
     confirmation before running, since a compromised sync remote could rewrite
     their body. Review with `koda edit <ref>` to trust an entry permanently
@@ -103,13 +137,26 @@ def exec_memo(
     row = resolve_ref(ref)
     content = _apply_vars(row.content.strip() if row.content else "", vars)
     shell = get_config().exec_shell
+
+    # Trailing CLI args become the shell's real positional parameters ($1, $@,
+    # ...), so bodies can use `$1`, `"$@"`, and `${1:-default}` natively. If the
+    # body doesn't reference them, append `"$@"` so they land at the end of the
+    # command, like extra words typed after a shell alias. With no extra args the
+    # invocation is byte-for-byte what it was before (full backward compatibility).
+    positionals = list(extra or [])
+    if positionals and not _references_positionals(content):
+        content = f'{content} "$@"'
+    # argv[3] becomes $0 for the spawned shell; positionals[*] become $1, $2, ...
+    argv = [shell, "-c", content, shell, *positionals] if positionals else [shell, "-c", content]
+
     if dry_run:
         # Preview only: skip remote confirmation and shell validation since
-        # nothing is executed. Quote both the shell and the body so the output
-        # is a faithful, copy-pasteable rendering of the real `<shell> -c <body>`
-        # invocation even when the shell name (validation skipped here) or the
-        # body contains characters the shell would otherwise re-interpret.
-        sys.stdout.write(f"{shlex.quote(shell)} -c {shlex.quote(content)}\n")
+        # nothing is executed. shlex.quote every part so the output is a
+        # faithful, copy-pasteable rendering of the real argv — including the
+        # `<shell> ... <args>` tail when trailing args are passed as positional
+        # parameters. The shell still does the final `$@`/`${1:-...}` expansion,
+        # so the preview shows the invocation, not the post-expansion string.
+        sys.stdout.write(" ".join(shlex.quote(part) for part in argv) + "\n")
         return
     if row.source == "remote" and not force and get_config().exec_confirm_remote:
         label = ref if ref is not None else f"[{row.idx}]"
@@ -134,7 +181,7 @@ def exec_memo(
             f"Refusing to exec: exec.shell {shell!r} is not allowed "
             f"({ConfigManager.error_message('exec.shell')})."
         )
-    os.execvp(shell, [shell, "-c", content])
+    os.execvp(shell, argv)
 
 
 @app.command(rich_help_panel="Core")

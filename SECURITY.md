@@ -32,7 +32,10 @@ koda stores arbitrary text entries and can execute them as shell commands
 - **Command execution** — `koda x` runs an entry's body through a shell. Entries
   brought in by `koda pull` are marked `source=remote` and require confirmation
   before they execute; reviewing an entry with `koda edit` clears that flag.
-  `exec.shell` is restricted to an allowlist of known shells. `koda x --dry-run`
+  `exec.shell` is restricted to an allowlist of known shells. Trailing CLI args
+  after the ref are passed as the shell's positional parameters (`$1`, `"$@"`),
+  individually quoted, so a caller's arguments cannot break out of the resolved
+  command. `koda x --dry-run`
   previews the resolved command without running it (and so skips the confirmation
   prompt — nothing executes), but it prints the body verbatim and does not strip
   terminal escape sequences; redirect its output to a file when inspecting a

@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `koda exec <ref> [args…]` now forwards trailing CLI arguments to the command.
+  They become the shell's real positional parameters (`$1`, `$2`, `"$@"`); if the
+  body doesn't reference them they are appended at the end (like a shell alias),
+  so `koda x dcu llama-server` runs `docker compose up -d llama-server` while
+  `koda x dcu` runs the bare command — no `$1`/`${}` placeholder required.
+  Bodies can also use `${1:-default}` for fallbacks. Use `--` before option-like
+  args. (`-V` textual substitution is unchanged.)
 - `koda exec --dry-run` / `-n` prints the resolved command (variables already
   substituted) without executing it, skipping the remote-confirmation prompt and
   shell validation — a safe way to preview an unreviewed `source=remote` entry.
