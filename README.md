@@ -285,7 +285,18 @@ koda a "kubectl logs -f deployment/\$1 --tail=200 -n production --timestamps=tru
 koda x klogs -V api-gateway    # run by shortcut with substitution
 koda x klogs -V worker         # different deployment, same flags
 koda x 12                      # run by index
+koda x klogs -V worker -n      # --dry-run: print the resolved command, don't run it
 ```
+
+**Preview before running — `--dry-run` / `-n`:**
+
+`koda x <ref> -n` prints the exact command that *would* run (variables already substituted) without executing it. It also skips the remote-confirmation prompt and shell validation, which makes it useful for checking an unreviewed `source=remote` entry before trusting it.
+
+```bash
+koda x deploy -V env=prod -n   # → sh -c 'kubectl apply -f prod/ && ...'
+```
+
+> The body is printed verbatim, including any terminal escape sequences it might contain. To inspect a *fully untrusted* entry, redirect the output to a file (`koda x <ref> -n > preview.txt`) rather than rendering it directly in your terminal.
 
 **Deferred command substitution — `\$()` expands at exec time, not at save time:**
 

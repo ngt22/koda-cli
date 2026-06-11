@@ -1,6 +1,7 @@
 """Execution and interactive-selection commands: exec, pick."""
 
 import os
+import shlex
 import sys
 
 import typer
@@ -67,6 +68,12 @@ def exec_memo(
         "-f",
         help="Skip the confirmation prompt for entries synced from a remote (source=remote).",
     ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        "-n",
+        help="Print the resolved command (after variable substitution) without running it.",
+    ),
 ):
     """Execute the memo body as a shell command. Alias: `koda x`.
 
@@ -77,6 +84,13 @@ def exec_memo(
     their body. Review with `koda edit <ref>` to trust an entry permanently
     (this clears the flag); -f runs it once without prompting. Set
     exec.confirm_remote=false to disable the prompt entirely (not recommended).
+
+    Use --dry-run/-n to preview the exact command that would run (variables
+    already substituted) without executing it, prompting, or validating the
+    shell — useful for checking an unreviewed remote entry before you trust it.
+    The body is printed verbatim, including any terminal escape sequences it may
+    contain, so to inspect a fully untrusted entry redirect the output to a file
+    (`koda x <ref> -n > preview.txt`) rather than rendering it in the terminal.
     """
     if ref is None:
         stdin_refs = _read_stdin_refs()
@@ -87,6 +101,16 @@ def exec_memo(
 
     init_db()
     row = resolve_ref(ref)
+    content = _apply_vars(row.content.strip() if row.content else "", vars)
+    shell = get_config().exec_shell
+    if dry_run:
+        # Preview only: skip remote confirmation and shell validation since
+        # nothing is executed. Quote both the shell and the body so the output
+        # is a faithful, copy-pasteable rendering of the real `<shell> -c <body>`
+        # invocation even when the shell name (validation skipped here) or the
+        # body contains characters the shell would otherwise re-interpret.
+        sys.stdout.write(f"{shlex.quote(shell)} -c {shlex.quote(content)}\n")
+        return
     if row.source == "remote" and not force and get_config().exec_confirm_remote:
         label = ref if ref is not None else f"[{row.idx}]"
         review_hint = f"Review it with `koda edit {label}` to trust it (clears the flag)"
@@ -103,8 +127,6 @@ def exec_memo(
             f"{review_hint}. Execute now anyway?"
         ):
             exit_error("Aborted.", code=ExitCode.CANCELLED, style="yellow")
-    content = _apply_vars(row.content.strip() if row.content else "", vars)
-    shell = get_config().exec_shell
     try:
         ConfigManager.validate("exec.shell", shell)
     except ValidationError:

@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `koda exec --dry-run` / `-n` prints the resolved command (variables already
+  substituted) without executing it, skipping the remote-confirmation prompt and
+  shell validation — a safe way to preview an unreviewed `source=remote` entry.
 - `SECURITY.md` (vulnerability reporting policy) and `CODE_OF_CONDUCT.md`
   (Contributor Covenant) for the project.
 - CI now runs `mypy` static type checking, and `pytest` enforces a 60% coverage
