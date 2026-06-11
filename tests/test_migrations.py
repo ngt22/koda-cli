@@ -94,6 +94,53 @@ def test_source_column_added_and_defaults_local(tmp_path):
     assert db.get_memo_by_uid(full).source == "local"
 
 
+def test_title_column_added_and_nullable(tmp_path):
+    """Migration 0004 adds the nullable title column to a v3 DB, preserving the
+    existing row (title NULL) and reaching user_version 4."""
+    old_path = tmp_path / "v3.db"
+    conn = sqlite3.connect(old_path)
+    conn.executescript(
+        """
+        CREATE TABLE memos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, uid TEXT UNIQUE, idx INTEGER UNIQUE,
+            shortcut TEXT, content TEXT, tags TEXT, created_at TIMESTAMP, modified_at TIMESTAMP,
+            source TEXT NOT NULL DEFAULT 'local'
+        );
+        PRAGMA user_version = 3;
+        """
+    )
+    full = compute_uid("body", "2026-01-01 00:00:00")
+    conn.execute(
+        "INSERT INTO memos (uid, idx, content, tags, created_at, modified_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (full, 0, "body", "", "2026-01-01 00:00:00", "2026-01-01 00:00:00"),
+    )
+    conn.commit()
+    conn.close()
+
+    db = MemoDatabase(backend="local", path=old_path)
+    db.init_db()
+
+    assert _user_version(db) == 4
+    assert "title" in _columns(db)
+    row = db.get_memo_by_uid(full)
+    assert row is not None and row.content == "body"
+    assert row.title is None
+
+
+def test_title_migration_is_idempotent_on_fresh_db(tmp_path):
+    """A fresh DB carries the title column and re-running init_db is a no-op."""
+    db = MemoDatabase(backend="local", path=tmp_path / "fresh_title.db")
+    db.init_db()
+    assert "title" in _columns(db)
+    assert _user_version(db) == SCHEMA_VERSION
+
+    # Re-run: must not error, drop the column, or re-apply the migration.
+    db.init_db()
+    assert "title" in _columns(db)
+    assert _user_version(db) == SCHEMA_VERSION
+
+
 def test_init_db_is_idempotent(tmp_path):
     db = MemoDatabase(backend="local", path=tmp_path / "idem.db")
     db.init_db()

@@ -44,9 +44,16 @@ def _validate_shortcut(shortcut: str | None) -> str | None:
     return shortcut
 
 
-def update_memo_full(memo_id: int, content: str, tags: str, shortcut: str | None, created_at: str):
+def update_memo_full(
+    memo_id: int,
+    content: str,
+    tags: str,
+    shortcut: str | None,
+    created_at: str,
+    title: str | None = None,
+):
     now = datetime.now().strftime(DATETIME_FMT)
-    get_db().update_memo(memo_id, content, tags, shortcut, created_at, now)
+    get_db().update_memo(memo_id, content, tags, shortcut, created_at, now, title=title)
 
 
 def _add_impl(
@@ -90,7 +97,9 @@ def _add_impl(
     now = datetime.now().strftime(DATETIME_FMT)
     uid = _generate_uid(content, now)
     try:
-        new_idx = get_db().add_memo_auto_idx(uid, shortcut, content, formatted_tags, now, now)
+        new_idx = get_db().add_memo_auto_idx(
+            uid, shortcut, content, formatted_tags, now, now, title=None
+        )
     except _IntegrityErrors:
         exit_error(f"Shortcut {shortcut!r} is already in use.")
 
@@ -216,7 +225,10 @@ def copy(
     row = resolve_ref(ref)
     now = datetime.now().strftime(DATETIME_FMT)
     new_uid = _generate_uid(row.content or "", now)
-    new_idx = get_db().add_memo_auto_idx(new_uid, None, row.content, row.tags, now, now)
+    # A copy keeps the source title (display label travels with the body).
+    new_idx = get_db().add_memo_auto_idx(
+        new_uid, None, row.content, row.tags, now, now, title=row.title
+    )
     console.print(f"[green]Copied [{row.idx}] → [{new_idx}] ({new_uid}).[/green]")
 
 
@@ -275,14 +287,23 @@ def edit(
             new_shortcut = _validate_shortcut(new_shortcut)
 
             try:
-                update_memo_full(memo_id, new_content, new_tags, new_shortcut, new_created_at)
+                # title has no footer field yet (follow-up issue), so pass the
+                # existing value through unchanged — editing must not wipe it.
+                update_memo_full(
+                    memo_id,
+                    new_content,
+                    new_tags,
+                    new_shortcut,
+                    new_created_at,
+                    title=row.title,
+                )
             except _IntegrityErrors:
                 exit_error(f"Shortcut {new_shortcut!r} is already in use.")
             if not quiet:
                 console.print(f"[green]Entry [{idx}] updated.[/green]")
         else:
             new_content = "\n---\n".join(parts).strip() if parts else new_data.strip()
-            update_memo_full(memo_id, new_content, tags, shortcut, created_at)
+            update_memo_full(memo_id, new_content, tags, shortcut, created_at, title=row.title)
             if not quiet:
                 console.print(
                     "[yellow]No metadata footer found; "

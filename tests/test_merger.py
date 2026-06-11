@@ -11,6 +11,7 @@ def entry(
     shortcut=None,
     created_at="2026-01-01 00:00:00",
     modified_at=None,
+    title=None,
 ):
     return {
         "uid": uid,
@@ -20,6 +21,7 @@ def entry(
         "tags": tags,
         "created_at": created_at,
         "modified_at": modified_at if modified_at is not None else created_at,
+        "title": title,
     }
 
 
@@ -133,6 +135,32 @@ def test_batch_mixed_outcomes(db):
     assert inserted == 2
     assert updated == 1
     assert skipped == 0
+
+
+def test_insert_carries_title(db):
+    MemoMerger(db).merge([entry("uid0001", 0, title="Deploy prod")])
+    assert db.get_memo_by_uid("uid0001").title == "Deploy prod"
+
+
+def test_update_carries_title(db):
+    db.add_memo("uid0001", 0, None, "old", "", "2026-01-01 00:00:00", "2026-01-01 00:00:00")
+    MemoMerger(db).merge(
+        [entry("uid0001", 0, content="new", modified_at="2026-02-01 00:00:00", title="Renamed")]
+    )
+    assert db.get_memo_by_uid("uid0001").title == "Renamed"
+
+
+def test_newer_remote_without_title_clears_local_title(db):
+    """Last-writer-wins is whole-record: a newer remote that omits the title
+    clears the local one (intentional — remote is the latest version)."""
+    db.add_memo(
+        "uid0001", 0, None, "old", "", "2026-01-01 00:00:00", "2026-01-01 00:00:00", title="Keep?"
+    )
+    assert db.get_memo_by_uid("uid0001").title == "Keep?"
+    MemoMerger(db).merge(
+        [entry("uid0001", 0, content="new", modified_at="2026-02-01 00:00:00", title=None)]
+    )
+    assert db.get_memo_by_uid("uid0001").title is None
 
 
 def test_two_new_entries_claim_same_idx(db):

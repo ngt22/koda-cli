@@ -141,6 +141,14 @@ class GitSyncPayload:
             sc = str(sc)
         else:
             sc = None
+        # title is content (synced). Missing/None/"" → None; non-str coerced.
+        # Old peers omit the field entirely, so a default of None gives backward
+        # compatibility.
+        title = raw.get("title", None)
+        if title is not None and title != "":
+            title = str(title)
+        else:
+            title = None
         return {
             "uid": uid,
             "idx": idx,
@@ -149,6 +157,7 @@ class GitSyncPayload:
             "tags": tags,
             "created_at": created_at,
             "modified_at": modified_at,
+            "title": title,
         }
 
     @staticmethod
@@ -177,11 +186,11 @@ class GitSyncPayload:
         """Export memos as UTF-8 JSON Lines, one object per line, sorted by uid."""
         with db.connection() as conn:
             rows = conn.execute(
-                "SELECT uid, idx, shortcut, content, tags, created_at, modified_at "
+                "SELECT uid, idx, shortcut, content, tags, created_at, modified_at, title "
                 "FROM memos ORDER BY uid ASC, id ASC"
             ).fetchall()
         memos: list[dict] = []
-        for uid, idx, shortcut, content, tags, created_at, modified_at in rows:
+        for uid, idx, shortcut, content, tags, created_at, modified_at, title in rows:
             ca = created_at or ""
             ma = modified_at if modified_at else (ca or "")
             memos.append(
@@ -193,6 +202,8 @@ class GitSyncPayload:
                     "tags": tags if tags is not None else "",
                     "created_at": ca,
                     "modified_at": ma,
+                    # title is content; emit JSON null when unset.
+                    "title": title,
                 }
             )
         memos.sort(key=lambda m: m["uid"])
@@ -409,6 +420,13 @@ class MemoMerger:
         modified_at = str(rm.get("modified_at") or "").strip() or created_at
         raw_sc = rm.get("shortcut")
         sc = raw_sc if raw_sc is None or raw_sc == "" else str(raw_sc)
+        # title is synced content. Missing (old peer) / None / "" → None. Since
+        # the merge is last-writer-wins over the whole record, a newer remote
+        # record that omits title will clear a local title — this is intentional
+        # (the remote is the authoritative latest version of the entry).
+        raw_title = rm.get("title")
+        title = raw_title if raw_title is None or raw_title == "" else str(raw_title)
+        title = title or None
         return {
             "uid": uid,
             "want_idx": want_idx,
@@ -417,6 +435,7 @@ class MemoMerger:
             "created_at": created_at,
             "modified_at": modified_at,
             "sc": sc,
+            "title": title,
             "r_ts": parse_memo_datetime(modified_at) or parse_memo_datetime(created_at),
         }
 
@@ -465,8 +484,9 @@ class MemoMerger:
                         shortcut_dropped += 1
                     conn.execute(
                         "INSERT INTO memos "
-                        "(uid, idx, shortcut, content, tags, created_at, modified_at, source) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, 'remote')",
+                        "(uid, idx, shortcut, content, tags, created_at, modified_at, "
+                        "title, source) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'remote')",
                         (
                             uid,
                             new_idx,
@@ -475,6 +495,7 @@ class MemoMerger:
                             rec["tags"],
                             rec["created_at"],
                             rec["modified_at"],
+                            rec["title"],
                         ),
                     )
                     inserted += 1
@@ -492,13 +513,14 @@ class MemoMerger:
                 self._apply_idx_for_row(conn, memo_id, rec["want_idx"])
                 conn.execute(
                     "UPDATE memos SET shortcut = ?, content = ?, tags = ?, "
-                    "created_at = ?, modified_at = ?, source = 'remote' WHERE id = ?",
+                    "created_at = ?, modified_at = ?, title = ?, source = 'remote' WHERE id = ?",
                     (
                         use_sc,
                         rec["content"],
                         rec["tags"],
                         rec["created_at"],
                         rec["modified_at"],
+                        rec["title"],
                         memo_id,
                     ),
                 )

@@ -47,6 +47,7 @@ VALID_SORT_COLUMNS = {
     "created_at",
     "modified_at",
     "shortcut",
+    "title",
 }
 
 
@@ -108,6 +109,16 @@ def _migration_0003_add_source(conn) -> None:
         conn.execute("ALTER TABLE memos ADD COLUMN source TEXT NOT NULL DEFAULT 'local'")
 
 
+def _migration_0004_add_title(conn) -> None:
+    """Add the nullable ``title`` column: a display-only, human-readable label.
+    Existing rows have no title, so the column stays NULL until set. It is
+    content (synced, unlike ``source``) but is never used to resolve a ref —
+    ``shortcut`` remains the only callable name."""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(memos)").fetchall()}
+    if "title" not in cols:
+        conn.execute("ALTER TABLE memos ADD COLUMN title TEXT")
+
+
 # Ordered list of schema migrations. Each entry N (0-based) advances the
 # database from PRAGMA user_version N to N+1. Append new migrations to the
 # end; never reorder or rewrite an existing one.
@@ -115,6 +126,7 @@ _MIGRATIONS: list[Callable[[sqlite3.Connection], None]] = [
     _migration_0001_initial_schema,
     _migration_0002_widen_uid,
     _migration_0003_add_source,
+    _migration_0004_add_title,
 ]
 
 SCHEMA_VERSION = len(_MIGRATIONS)
@@ -217,7 +229,7 @@ class MemoDatabase:
             sql += " AND shortcut IS NOT NULL AND shortcut != ''"
         return sql, tuple(params)
 
-    _MEMO_COLUMNS = "id, uid, idx, content, tags, shortcut, created_at, modified_at, source"
+    _MEMO_COLUMNS = "id, uid, idx, content, tags, shortcut, created_at, modified_at, source, title"
 
     def get_memos(
         self,
@@ -315,12 +327,14 @@ class MemoDatabase:
         tags: str,
         created_at: str,
         modified_at: str,
+        title: str | None = None,
     ) -> None:
         with self.connection() as conn:
             conn.execute(
-                "INSERT INTO memos (uid, idx, shortcut, content, tags, created_at, modified_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (uid, idx, shortcut or None, content, tags, created_at, modified_at),
+                "INSERT INTO memos "
+                "(uid, idx, shortcut, content, tags, created_at, modified_at, title) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (uid, idx, shortcut or None, content, tags, created_at, modified_at, title),
             )
 
     def add_memo_auto_idx(
@@ -331,6 +345,7 @@ class MemoDatabase:
         tags: str,
         created_at: str,
         modified_at: str,
+        title: str | None = None,
     ) -> int:
         """Insert a memo at the next free display index, allocated atomically in
         the same transaction, and return that idx. Raises ``IntegrityErrors`` on
@@ -340,9 +355,9 @@ class MemoDatabase:
             new_idx = self.next_idx(conn)
             conn.execute(
                 "INSERT INTO memos "
-                "(uid, idx, shortcut, content, tags, created_at, modified_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (uid, new_idx, shortcut or None, content, tags, created_at, modified_at),
+                "(uid, idx, shortcut, content, tags, created_at, modified_at, title) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (uid, new_idx, shortcut or None, content, tags, created_at, modified_at, title),
             )
         return new_idx
 
@@ -354,14 +369,15 @@ class MemoDatabase:
         shortcut: str | None,
         created_at: str,
         modified_at: str,
+        title: str | None = None,
     ) -> None:
         with self.connection() as conn:
             # Editing an entry counts as reviewing it: reset source to 'local'
             # so a previously remote-synced entry no longer warns on exec.
             conn.execute(
                 "UPDATE memos SET content = ?, tags = ?, shortcut = ?, "
-                "created_at = ?, modified_at = ?, source = 'local' WHERE id = ?",
-                (content.strip(), tags, shortcut or None, created_at, modified_at, memo_id),
+                "created_at = ?, modified_at = ?, title = ?, source = 'local' WHERE id = ?",
+                (content.strip(), tags, shortcut or None, created_at, modified_at, title, memo_id),
             )
 
     def delete_memo(self, memo_id: int) -> None:
