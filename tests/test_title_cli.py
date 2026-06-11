@@ -254,8 +254,9 @@ def test_list_with_query_shows_title_hit(wired_db, monkeypatch, capsys):
     _seed_two(wired_db)
     memo._list_memos_impl(query="Deploy")
     out = capsys.readouterr().out
-    # The body "unrelated body" should appear in the listed row.
-    assert "unrelated body" in out
+    # In title display mode (default), the content cell shows the title "Deploy prod"
+    # for the matched entry (uid0001 has title="Deploy prod", body="unrelated body").
+    assert "Deploy prod" in out
 
 
 def test_remove_batch_query_matches_title(wired_db, monkeypatch, capsys):

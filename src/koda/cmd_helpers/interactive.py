@@ -41,6 +41,23 @@ def pick_candidates(
     )
 
 
+def _fzf_line(row: MemoRow) -> str:
+    """Build the tab-delimited fzf input line for a single memo row.
+
+    Fields: idx \\t uid \\t sc \\t tags \\t created_at \\t label \\t first_line
+    where label = title if set, else first body line, and first_line is always
+    the first body line.  Tab characters inside label/first_line are replaced
+    with a space so they don't shift the field layout.
+    """
+    first_line = (row.content or "").splitlines()[0] if row.content else ""
+    first_line = first_line.replace("\t", " ")
+    label = (row.title or first_line).replace("\t", " ")
+    return (
+        f"{row.idx}\t{row.uid}\t{row.shortcut or '-'}\t"
+        f"{row.tags or '-'}\t{row.created_at}\t{label}\t{first_line}"
+    )
+
+
 def _run_fzf(candidates: list[MemoRow], multi: bool) -> list[str]:
     """Run fzf over the candidates and return the selected entry refs (idx strings).
 
@@ -52,14 +69,7 @@ def _run_fzf(candidates: list[MemoRow], multi: bool) -> list[str]:
     if not sys.stdin.isatty():
         exit_error("`koda pick` requires an interactive TTY.")
 
-    lines: list[str] = []
-    for row in candidates:
-        first_line = (row.content or "").splitlines()[0] if row.content else ""
-        display = (
-            f"{row.idx}\t{row.uid}\t{row.shortcut or '-'}\t"
-            f"{row.tags or '-'}\t{row.created_at}\t{first_line}"
-        )
-        lines.append(display)
+    lines = [_fzf_line(row) for row in candidates]
 
     term_cols = shutil.get_terminal_size(fallback=(120, 40)).columns
     # Keep list area readable on narrower terminals by switching to bottom preview.
@@ -75,8 +85,8 @@ def _run_fzf(candidates: list[MemoRow], multi: bool) -> list[str]:
         "koda> ",
         "--preview",
         (
-            "printf 'IDX: %s\\nUID: %s\\nSC: %s\\nTags: %s\\nCreated: %s\\n\\n%s\\n' "
-            "{1} {2} {3} {4} {5} {6}"
+            "printf 'IDX: %s\\nUID: %s\\nSC: %s\\nTags: %s\\nCreated: %s\\nTitle: %s\\n\\n%s\\n' "
+            "{1} {2} {3} {4} {5} {6} {7}"
         ),
         "--preview-window",
         preview_window,

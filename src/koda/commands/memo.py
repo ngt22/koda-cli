@@ -9,6 +9,7 @@ from pathlib import Path
 
 import typer
 from rich.table import Table
+from rich.text import Text
 
 from ..cli_utils import ExitCode, confirm, exit_error
 from ..cmd_helpers.display import print_memo as _print_memo
@@ -397,6 +398,62 @@ def _emit_list_json(
     sys.stdout.write(json.dumps([r.to_dict() for r in rows], ensure_ascii=False, indent=2) + "\n")
 
 
+_DISPLAY_MODES = ("title", "body", "full", "both")
+
+
+def _build_content_cell(
+    memo,
+    display_mode: str,
+    rows_value: int | None,
+    truncate: int,
+) -> Text | str:
+    """Build the Rich renderable for the content column based on display_mode."""
+    content_lines = (memo.content or "").splitlines()
+
+    def _preview_lines() -> list[str]:
+        if rows_value is None:
+            lines = content_lines if content_lines else [""]
+        else:
+            lines = content_lines[:rows_value] if content_lines else [""]
+            if content_lines and len(content_lines) > rows_value:
+                lines = lines + ["..."]
+        if truncate > 0:
+            ellipsis = "..."
+            if truncate <= len(ellipsis):
+                lines = [line[:truncate] for line in lines]
+            else:
+                lines = [
+                    line if len(line) <= truncate else line[: truncate - len(ellipsis)] + ellipsis
+                    for line in lines
+                ]
+        return lines
+
+    if display_mode == "body":
+        return "\n".join(_preview_lines())
+
+    if display_mode == "title":
+        if memo.title:
+            cell = Text()
+            cell.append(memo.title, style="bold")
+            return cell
+        # Fallback: body preview (same as body mode)
+        return "\n".join(_preview_lines())
+
+    if display_mode == "full":
+        return "\n".join(content_lines) if content_lines else ""
+
+    # both
+    cell = Text()
+    if memo.title:
+        cell.append(memo.title, style="bold")
+        preview = "\n".join(_preview_lines())
+        if preview:
+            cell.append("\n" + preview)
+    else:
+        cell.append("\n".join(_preview_lines()))
+    return cell
+
+
 def _list_memos_impl(
     query: str | None = None,
     tag: str | None = None,
@@ -409,6 +466,7 @@ def _list_memos_impl(
     rows: str | None = None,
     truncate: int | None = None,
     columns: list[str] | None = None,
+    display: str | None = None,
 ) -> None:
     init_db()
 
@@ -429,6 +487,8 @@ def _list_memos_impl(
         truncate = get_config().list_truncate
     elif truncate < 0:
         exit_error("--truncate must be 0 or greater.")
+    if display is None:
+        display = get_config().list_display
 
     normalized_sort = sort_by.lower()
     if normalized_sort not in VALID_SORT_COLUMNS:
@@ -481,42 +541,28 @@ def _list_memos_impl(
         label, kwargs = COLUMN_DEFS[col]
         table.add_column(label, **kwargs)
 
-    row_values: dict = {}
     for memo in memos:
-        content_lines = (memo.content or "").splitlines()
-        if rows_value is None:
-            preview_lines = content_lines if content_lines else [""]
-        else:
-            preview_lines = content_lines[:rows_value] if content_lines else [""]
-            if content_lines and len(content_lines) > rows_value:
-                preview_lines = preview_lines + ["..."]
-
-        if truncate > 0:
-            ellipsis = "..."
-            if truncate <= len(ellipsis):
-                preview_lines = [line[:truncate] for line in preview_lines]
-            else:
-                preview_lines = [
-                    line if len(line) <= truncate else line[: truncate - len(ellipsis)] + ellipsis
-                    for line in preview_lines
-                ]
-
-        preview = "\n".join(preview_lines)
+        content_cell = _build_content_cell(memo, display, rows_value, truncate)
         row_values = {
             "idx": str(memo.idx),
             "uid": memo.uid or "",
             "sc": memo.shortcut or "",
             "tags": memo.tags or "",
-            "content": preview,
+            "title": memo.title or "",
+            "content": content_cell,
             "created_at": memo.created_at,
         }
         table.add_row(*[row_values[col] for col in columns])
     console.print(table)
-    rows_text = "0" if rows_value is None else str(rows_value)
-    truncate_text = "off" if truncate == 0 else str(truncate)
+    if display == "full":
+        rows_text = "all"
+        truncate_text = "off"
+    else:
+        rows_text = "0" if rows_value is None else str(rows_value)
+        truncate_text = "off" if truncate == 0 else str(truncate)
     console.print(
         f"[dim]Total: {total_count} | Pages: {total_pages} | Max IDX: {max_idx} | "
-        f"Rows: {rows_text} | Truncate: {truncate_text}[/dim]"
+        f"Rows: {rows_text} | Truncate: {truncate_text} | Display: {display}[/dim]"
     )
     if total_pages > 1 and page < total_pages:
         console.print(f"[dim]Page {page}/{total_pages} — next: koda l -p {page + 1}[/dim]")
@@ -579,6 +625,12 @@ def list_memos(
             f"Available: {', '.join(VALID_LIST_COLUMNS)}. [config: list.columns]"
         ),
     ),
+    display: str | None = typer.Option(
+        None,
+        "--display",
+        "-d",
+        help=("Content column display mode: title, body, full, or both. [config: list.display]"),
+    ),
     json_output: bool = typer.Option(
         False, "--json", help="Output all matching entries as a JSON array (ignores paging)."
     ),
@@ -597,6 +649,11 @@ def list_memos(
     if columns is not None:
         parsed_columns = [c.strip() for c in columns.split(",") if c.strip()]
         _validate_list_columns(parsed_columns, "--columns")
+    parsed_display: str | None = None
+    if display is not None:
+        parsed_display = display.strip().lower()
+        if parsed_display not in _DISPLAY_MODES:
+            exit_error(f"Invalid --display {display!r}. Use one of: title, body, full, both.")
     _list_memos_impl(
         query,
         tag,
@@ -609,6 +666,7 @@ def list_memos(
         rows,
         truncate,
         parsed_columns,
+        parsed_display,
     )
 
 
