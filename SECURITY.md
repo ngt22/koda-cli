@@ -32,7 +32,11 @@ koda stores arbitrary text entries and can execute them as shell commands
 - **Command execution** — `koda x` runs an entry's body through a shell. Entries
   brought in by `koda pull` are marked `source=remote` and require confirmation
   before they execute; reviewing an entry with `koda edit` clears that flag.
-  `exec.shell` is restricted to an allowlist of known shells.
+  `exec.shell` is restricted to an allowlist of known shells. `koda x --dry-run`
+  previews the resolved command without running it (and so skips the confirmation
+  prompt — nothing executes), but it prints the body verbatim and does not strip
+  terminal escape sequences; redirect its output to a file when inspecting a
+  fully untrusted entry.
 - **Git sync** — `push`/`pull` exchange entries as JSON Lines. The merge is
   last-writer-wins on `modified_at`, and future-dated timestamps are rejected so
   a malicious peer cannot force-overwrite local entries. The `source` trust

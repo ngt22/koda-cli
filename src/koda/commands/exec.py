@@ -87,7 +87,10 @@ def exec_memo(
 
     Use --dry-run/-n to preview the exact command that would run (variables
     already substituted) without executing it, prompting, or validating the
-    shell — handy for inspecting an unreviewed remote entry safely.
+    shell — useful for checking an unreviewed remote entry before you trust it.
+    The body is printed verbatim, including any terminal escape sequences it may
+    contain, so to inspect a fully untrusted entry redirect the output to a file
+    (`koda x <ref> -n > preview.txt`) rather than rendering it in the terminal.
     """
     if ref is None:
         stdin_refs = _read_stdin_refs()
@@ -102,8 +105,11 @@ def exec_memo(
     shell = get_config().exec_shell
     if dry_run:
         # Preview only: skip remote confirmation and shell validation since
-        # nothing is executed. Quote the body so the output is copy-pasteable.
-        sys.stdout.write(f"{shell} -c {shlex.quote(content)}\n")
+        # nothing is executed. Quote both the shell and the body so the output
+        # is a faithful, copy-pasteable rendering of the real `<shell> -c <body>`
+        # invocation even when the shell name (validation skipped here) or the
+        # body contains characters the shell would otherwise re-interpret.
+        sys.stdout.write(f"{shlex.quote(shell)} -c {shlex.quote(content)}\n")
         return
     if row.source == "remote" and not force and get_config().exec_confirm_remote:
         label = ref if ref is not None else f"[{row.idx}]"
