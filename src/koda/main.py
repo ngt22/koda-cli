@@ -68,7 +68,7 @@ app = typer.Typer(
     invoke_without_command=True,
     no_args_is_help=False,
 )
-app.add_typer(config_app, name="config")
+app.add_typer(config_app, name="config", rich_help_panel="Config")
 
 
 @app.callback(invoke_without_command=True)

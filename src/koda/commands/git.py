@@ -83,7 +83,7 @@ def _merge_payload(data: bytes) -> None:
     )
 
 
-@app.command()
+@app.command(rich_help_panel="Git sync")
 def push(
     payload_file: Path | None = typer.Option(
         None, "--file", help="Use this JSONL file instead of exporting the local database."
@@ -143,7 +143,7 @@ def push(
     console.print(f"[green]Synced payload to Git: {payload_path}[/green]")
 
 
-@app.command()
+@app.command(rich_help_panel="Git sync")
 def pull(
     local_payload_path: Path | None = typer.Option(
         None, "--file", help="Import from this JSONL file (skip git pull in the clone)."
@@ -169,7 +169,7 @@ def pull(
     console.print("[green]Pull complete.[/green]")
 
 
-@app.command()
+@app.command(rich_help_panel="Data")
 def export(
     out: Path | None = typer.Option(
         None, "--out", "-o", help="Write JSONL to this file instead of stdout."
@@ -188,7 +188,7 @@ def export(
         sys.stdout.buffer.write(data)
 
 
-@app.command(name="import")
+@app.command(name="import", rich_help_panel="Data")
 def import_memos(
     file: Path = typer.Argument(..., help="JSONL file to import (merged by uid + modified_at)."),
 ):
@@ -204,7 +204,7 @@ def import_memos(
     console.print("[green]Import complete.[/green]")
 
 
-@app.command()
+@app.command(rich_help_panel="Data")
 def diff(
     local_payload_path: Path | None = typer.Option(
         None, "--file", help="Diff against this JSONL file instead of the Git clone."
@@ -255,7 +255,7 @@ def diff(
     )
 
 
-@app.command()
+@app.command(rich_help_panel="Data")
 def backup(
     out: Path = typer.Option(
         ..., "--out", "-o", help="Destination file for the SQLite snapshot (must not exist)."
