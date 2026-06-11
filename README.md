@@ -406,7 +406,30 @@ printf 'greet() {\n  echo "hi $1"\n}\ngreet "$1"\n' | koda a -s greet
 koda x greet -V world   # → hi world
 ```
 
-> **Security**: only store trusted commands. `exec` runs the body through the configured shell (`sh` by default).
+**Group entries — a playlist of other entries:**
+
+If a body is a list of `@<ref>` references (one per line, every line starting with `@`), `koda x` treats it as a **group**: it expands the references and runs each child sequentially, like a lightweight task runner. The `@<ref>` is an index or shortcut.
+
+```bash
+koda a "docker compose down" -s dcd
+koda a "docker compose up -d" -s dcu
+koda a "docker compose logs -f" -s dcl
+
+koda a -s restart        # opens $EDITOR; paste:
+#   @dcd
+#   @dcup        # comments and blank lines are ignored
+#   @dcl -f
+koda x restart           # runs dcd, then dcup, then `dcl -f`, in order
+```
+
+- **Per-line args.** Text after a ref on a line is passed to that child, with the same rules as call-time args: it fills `$1`/`"$@"` if the child body references them, otherwise it's appended (`@dcl -f` → `docker compose logs -f`).
+- **Nesting.** A child that is itself a group expands recursively. Cycles (`@a` → `@b` → `@a`) are detected and rejected, and nesting is capped at 10 levels deep.
+- **Parameterize with `-V`.** `-V` substitutes into the group body *before* it's parsed, so `@${SVC}` resolves to a different child per call (`koda x grp -V SVC=web`). Trailing args directly after a group ref are not supported in v1 — use `-V`.
+- **Fail fast.** The whole plan is resolved before anything runs, so an unknown ref aborts with nothing executed. The first child to exit non-zero stops the group, and `koda x` exits with that child's code. Progress lines (`→ [3] dcl (2/5)`) go to stderr, keeping stdout clean for the children's own output.
+- **Remote confirmation.** If the group itself or any expanded child is `source=remote`, `koda x` prompts once before running the whole group (listing the remote entries); `-f` skips it and `exec.confirm_remote=false` disables it, same as a single entry.
+- **Preview with `-n`.** `koda x <group> -n` prints one resolved command per child, in execution order, without running anything.
+
+> **Security**: only store trusted commands. `exec` runs the body through the configured shell (`sh` by default). A group runs each referenced entry, so the same caution applies to every child it pulls in.
 
 ---
 
@@ -837,7 +860,7 @@ koda pull   # git pull the clone, merge koda-sync.jsonl into local DB
 
 The sync remote is **outside your trust boundary**. Anyone who can write to it (a compromised account, a shared repo, a malicious collaborator) can change the body of any synced entry — including one bound to a shortcut you `exec`. To contain this:
 
-- **Entries arriving via `pull` are marked `source=remote`.** `koda exec`/`koda x` **prompts for confirmation before running a `source=remote` entry**, so a silently rewritten `deploy` snippet cannot execute unattended. The recommended way to trust an entry is to **review it with `koda edit <ref>`**, which clears the flag back to `local` permanently. `koda x -f/--force` runs it once without prompting — prefer `edit` over habitually reaching for `-f`, since an `-f` baked into an alias or script silently disables the check.
+- **Entries arriving via `pull` are marked `source=remote`.** `koda exec`/`koda x` **prompts for confirmation before running a `source=remote` entry**, so a silently rewritten `deploy` snippet cannot execute unattended. The recommended way to trust an entry is to **review it with `koda edit <ref>`**, which clears the flag back to `local` permanently. `koda x -f/--force` runs it once without prompting — prefer `edit` over habitually reaching for `-f`, since an `-f` baked into an alias or script silently disables the check. A [group entry](#execute-exec--run-a-saved-command) gates the same way: if the group or any expanded child is `source=remote`, `koda x` prompts once before running the whole group.
 - **Preview before you merge.** `koda pull --dry-run` shows the exact insert/update diff *without* touching the local database, so you can inspect incoming changes first.
 - **The `source` flag never crosses the wire.** It is local-only state and is not written to (or read from) `koda-sync.jsonl`, so a remote cannot label its own entries `local` to dodge the prompt.
 

@@ -3,9 +3,12 @@
 import os
 import re
 import shlex
+import subprocess
 import sys
+from dataclasses import dataclass
 
 import typer
+from rich.console import Console
 
 from ..cli_utils import ExitCode, confirm, exit_error
 from ..cmd_helpers.display import print_memo as _print_memo
@@ -17,9 +20,11 @@ from ..cmd_helpers.interactive import (
 )
 from ..config import ConfigManager, ValidationError
 from ..main import app
+from ..models import MemoRow
 from ..runtime import (
     _apply_vars,
     _read_stdin_refs,
+    _strip_inline_comment,
     emit_raw,
     get_config,
     get_db,
@@ -27,6 +32,13 @@ from ..runtime import (
     resolve_ref,
 )
 from . import memo  # bound as a module to avoid a circular import at load time
+
+# A reference line in a group body: `@<ref> [args...]`. <ref> is an idx (digits)
+# or shortcut resolved via resolve_ref; the rest is shlex.split into per-child args.
+_GROUP_REF_RE = re.compile(r"^@\S+")
+# Guard against pathologically/maliciously deep nesting and indirect cycles even
+# before the uid stack catches a true loop.
+_MAX_GROUP_DEPTH = 10
 
 # Matches a shell positional-parameter reference: $1..$9, $0, $@, $*, $#, and the
 # braced forms ${1...}, ${@}, ${*}, ${#}. Deliberately does NOT match koda's own
@@ -42,6 +54,147 @@ def _references_positionals(body: str) -> bool:
     or left for the body to pick up itself (body uses $1/$@/${1:-default}/...).
     """
     return bool(_POSITIONAL_REF_RE.search(body))
+
+
+def _build_argv(shell: str, content: str, args: list[str]) -> list[str]:
+    """Build the `[shell, -c, content, shell, *args]` argv for one body.
+
+    Mirrors the single-entry construction: trailing args become the shell's real
+    positional params; if the body doesn't reference them, `"$@"` is appended so
+    they land at the end like extra words after an alias. With no args the tail is
+    omitted, keeping the invocation byte-for-byte identical to the no-args case.
+    """
+    if args and not _references_positionals(content):
+        content = f'{content} "$@"'
+    return [shell, "-c", content, shell, *args] if args else [shell, "-c", content]
+
+
+@dataclass(frozen=True)
+class _GroupChild:
+    """One resolved reference line in an expanded group plan."""
+
+    row: MemoRow
+    args: list[str]
+    argv: list[str]
+
+
+def _group_ref_lines(content: str) -> list[str] | None:
+    """Classify a body after _apply_vars: list of `@`-reference lines or None.
+
+    Strips inline comments and drops blank lines first. Returns the surviving
+    reference lines if EVERY remaining line is a `@<ref>` line (a group); None if
+    none are (a normal single-entry body). A mixed body (some but not all `@`
+    lines) is an error.
+    """
+    lines = []
+    for raw in content.splitlines():
+        line = _strip_inline_comment(raw).strip()
+        if line:
+            lines.append(line)
+    if not lines:
+        return None
+    ref_lines = [line for line in lines if _GROUP_REF_RE.match(line)]
+    if not ref_lines:
+        return None
+    if len(ref_lines) != len(lines):
+        exit_error("Mixed body: '@' reference lines cannot be combined with plain script lines.")
+    return ref_lines
+
+
+def _expand_group(
+    ref_lines: list[str], shell: str, uid_stack: list[str], depth: int
+) -> list[_GroupChild]:
+    """Resolve a group's reference lines into a flat, ordered child plan.
+
+    Resolves the FULL plan upfront so an unknown ref aborts before anything runs
+    (fail fast). Nested groups expand recursively; the uid_stack detects cycles
+    and _MAX_GROUP_DEPTH bounds runaway nesting.
+    """
+    if depth > _MAX_GROUP_DEPTH:
+        exit_error(f"Group nesting too deep (max {_MAX_GROUP_DEPTH}).")
+    plan: list[_GroupChild] = []
+    for line in ref_lines:
+        ref = line[1:]  # drop the leading '@'
+        try:
+            parts = shlex.split(ref)
+        except ValueError:
+            exit_error(f"Malformed reference line: {line!r}.")
+        # shlex.split never yields an empty list here: _GROUP_REF_RE guaranteed
+        # at least one non-space char after '@'.
+        child_ref, child_args = parts[0], parts[1:]
+        row = resolve_ref(child_ref)
+        child_content = row.content.strip() if row.content else ""
+        nested = _group_ref_lines(child_content)
+        if nested is not None:
+            if row.uid in uid_stack:
+                cycle = " -> ".join([*uid_stack, row.uid])
+                exit_error(f"Group cycle detected: {cycle}.")
+            plan.extend(_expand_group(nested, shell, [*uid_stack, row.uid], depth + 1))
+        else:
+            argv = _build_argv(shell, child_content, child_args)
+            plan.append(_GroupChild(row=row, args=child_args, argv=argv))
+    return plan
+
+
+def _first_line(content: str | None, limit: int = 60) -> str:
+    """First body line, truncated for confirmation/progress display."""
+    first = (content or "").strip().splitlines()
+    text = first[0] if first else ""
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _confirm_remote_children(involved: list[MemoRow], force: bool) -> None:
+    """Prompt once for the source=remote entries in a group plan, or refuse.
+
+    `involved` is the deduped group+children set. Mirrors the single-entry remote
+    gate: non-TTY refuses with the `koda edit` review hint; a TTY prompts once
+    listing each remote entry (children never re-prompt individually).
+    """
+    if not get_config().exec_confirm_remote or force:
+        return
+    remotes = [row for row in involved if row.source == "remote"]
+    if not remotes:
+        return
+    listing = []
+    for row in remotes[:10]:
+        listing.append(f"[{row.idx}] {_first_line(row.content)}")
+    if len(remotes) > 10:
+        listing.append(f"... and {len(remotes) - 10} more")
+    bullet = "\n".join(f"  {item}" for item in listing)
+    if not sys.stdin.isatty():
+        exit_error(
+            "Refusing to exec group: it involves entries synced from a remote "
+            "(source=remote) and not reviewed locally:\n"
+            f"{bullet}\n"
+            "Review them with `koda edit <ref>` to trust them (clears the flag), "
+            "or re-run with -f to execute now.",
+            style="yellow",
+        )
+    if not confirm(
+        "This group involves entries synced from a remote and not reviewed locally:\n"
+        f"{bullet}\n"
+        "Review with `koda edit <ref>` to trust them. Execute the group now anyway?"
+    ):
+        exit_error("Aborted.", code=ExitCode.CANCELLED, style="yellow")
+
+
+def _run_group(plan: list[_GroupChild], shell: str) -> None:
+    """Run each child sequentially; stop and exit on the first non-zero code.
+
+    Progress goes to STDERR so stdout stays clean for the children's own output.
+    """
+    err = Console(stderr=True)
+    total = len(plan)
+    for i, child in enumerate(plan, start=1):
+        label = child.row.shortcut or str(child.row.idx)
+        err.print(f"→ [{child.row.idx}] {label} ({i}/{total})", style="dim")
+        result = subprocess.run(child.argv)
+        if result.returncode != 0:
+            err.print(
+                f"Group stopped: [{child.row.idx}] {label} exited {result.returncode}.",
+                style="red",
+            )
+            raise typer.Exit(code=result.returncode)
 
 
 def _run_pick_action(action: str, ref: str) -> None:
@@ -145,6 +298,36 @@ def exec_memo(
     row = resolve_ref(ref)
     content = _apply_vars(row.content.strip() if row.content else "", vars)
     shell = get_config().exec_shell
+
+    # Group entry: a body whose lines are all `@<ref>` references. Detected after
+    # _apply_vars so `-V` can parameterize the group body (e.g. `@${SVC}`). Only
+    # the GROUP body goes through _apply_vars; children execute verbatim, so the
+    # backslash-escaped `\$(...)` storage contract is preserved (no second pass).
+    ref_lines = _group_ref_lines(content)
+    if ref_lines is not None:
+        if extra:
+            exit_error("Group entries do not take trailing args; parameterize with -V instead.")
+        plan = _expand_group(ref_lines, shell, [row.uid], depth=1)
+        if dry_run:
+            # Preview only: one shlex-quoted argv line per child, in execution
+            # order. No progress lines, confirmation, or shell validation — keep
+            # it pipeable, matching the single-entry preview rendering.
+            for child in plan:
+                sys.stdout.write(" ".join(shlex.quote(part) for part in child.argv) + "\n")
+            return
+        # Dedup the group + children by id so an entry referenced twice prompts
+        # once. The group entry itself can be source=remote and must also gate.
+        involved = list({r.id: r for r in [row, *(c.row for c in plan)]}.values())
+        _confirm_remote_children(involved, force)
+        try:
+            ConfigManager.validate("exec.shell", shell)
+        except ValidationError:
+            exit_error(
+                f"Refusing to exec: exec.shell {shell!r} is not allowed "
+                f"({ConfigManager.error_message('exec.shell')})."
+            )
+        _run_group(plan, shell)
+        return
 
     # Trailing CLI args become the shell's real positional parameters ($1, $@,
     # ...), so bodies can use `$1`, `"$@"`, and `${1:-default}` natively. If the
