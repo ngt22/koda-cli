@@ -316,6 +316,31 @@ koda x 12                      # run by index
 koda x klogs -V worker -n      # --dry-run: print the resolved command, don't run it
 ```
 
+**Append arguments at call time — `koda x <ref> [args…]`:**
+
+Anything after the ref is passed to the command. If the body doesn't use it, it's appended at the end — like extra words after a shell alias — so one snippet covers both the bare and the parameterized case, with no `$1`/`${}` needed:
+
+```bash
+koda a "docker compose up -d" -s dcu
+
+koda x dcu                 # → docker compose up -d
+koda x dcu llama-server    # → docker compose up -d llama-server
+koda x dcu web db          # → docker compose up -d web db
+```
+
+If the body *does* reference positional parameters, the args fill them instead, and `${1:-default}` supplies a fallback when none are passed:
+
+```bash
+koda a 'kubectl logs $1 --tail=100' -s klog
+koda x klog mypod          # → kubectl logs mypod --tail=100
+
+koda a 'echo Hello ${1:-world}' -s greet
+koda x greet               # → Hello world
+koda x greet Alice         # → Hello Alice
+```
+
+The args become the shell's real positional parameters (`$1`, `$2`, `"$@"`), so a value with spaces stays one word. Put `--` before anything that looks like an option (`koda x dcu -- --build`); koda's own flags (`-V`, `-f`, `-n`) are otherwise consumed by koda. This is distinct from `-V`, which does textual `$1`/`${KEY}` substitution *before* the shell runs — use `-V` when you need to drop a value into the middle of the body.
+
 **Preview before running — `--dry-run` / `-n`:**
 
 `koda x <ref> -n` prints the exact command that *would* run (variables already substituted) without executing it. It also skips the remote-confirmation prompt and shell validation, which makes it useful for checking an unreviewed `source=remote` entry before trusting it.
