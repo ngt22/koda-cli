@@ -217,8 +217,9 @@ class MemoDatabase:
         sql = " WHERE 1=1"
         params: list = []
         if query:
-            sql += " AND content LIKE ?"
-            params.append(f"%{query}%")
+            # Match against both body and title so `-q` finds title-only hits.
+            sql += " AND (content LIKE ? OR title LIKE ?)"
+            params.extend([f"%{query}%", f"%{query}%"])
         if tag:
             sql += " AND tags LIKE ?"
             params.append(f"%{tag}%")

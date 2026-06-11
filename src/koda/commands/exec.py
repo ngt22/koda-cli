@@ -51,7 +51,15 @@ def _run_pick_action(action: str, ref: str) -> None:
     if action == "show":
         init_db()
         row = resolve_ref(ref)
-        _print_memo(row.uid, row.idx, row.shortcut, row.content, row.tags, row.created_at)
+        _print_memo(
+            row.uid,
+            row.idx,
+            row.shortcut,
+            row.content,
+            row.tags,
+            row.created_at,
+            title=row.title,
+        )
         return
     if action == "edit":
         memo.edit(ref)
@@ -186,7 +194,9 @@ def exec_memo(
 
 @app.command(rich_help_panel="Core")
 def pick(
-    query: str | None = typer.Option(None, "--query", "-q", help="Substring match on memo body."),
+    query: str | None = typer.Option(
+        None, "--query", "-q", help="Substring match on memo body or title."
+    ),
     tag: str | None = typer.Option(None, "--tag", "-t", help="Substring match on tags."),
     exclude_tag: str | None = typer.Option(
         None, "--exclude-tag", "-T", help="Exclude entries whose tags include this substring."
