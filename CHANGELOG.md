@@ -40,6 +40,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `list`, `remove`, and `pick`. The `--quiet` flag on `add`/`copy`/`tag`/`move`/
   `swap` no longer has a `-q` short alias — spell out `--quiet`. This removes the
   ambiguity of `-q` meaning different things on different commands.
+- `koda --help` now groups commands into labeled sections (Core, Git sync, Data,
+  Index, Config) instead of one flat list, making the `push`/`pull` sync
+  commands and the data/index commands easier to discover.
 
 ### Fixed
 - `swap` no longer fails with a UNIQUE-constraint error when one of the entries

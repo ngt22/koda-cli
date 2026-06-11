@@ -104,7 +104,7 @@ def _add_impl(
         console.print(f"[green]Saved [{new_idx}] ({uid}){meta}[/green]")
 
 
-@app.command()
+@app.command(rich_help_panel="Core")
 def add(
     text: list[str] | None = typer.Argument(
         None, help="Text to save (optional if using stdin or $EDITOR)."
@@ -129,7 +129,7 @@ def add(
     _add_impl(text, tag, shortcut, quiet=quiet, print_uid=print_uid, print_idx=print_idx)
 
 
-@app.command(name="remove")
+@app.command(name="remove", rich_help_panel="Core")
 def rm(
     indices: list[str] | None = typer.Argument(
         None, help="Entry indices, ranges (e.g. 1 3 5-8), or a single shortcut. Default: latest."
@@ -205,7 +205,7 @@ def rm(
         console.print(f"[red]Deleted [{row.idx}]: {preview}...[/red]")
 
 
-@app.command(name="copy")
+@app.command(name="copy", rich_help_panel="Core")
 def copy(
     ref: str | None = typer.Argument(
         None, help="Source entry index or shortcut (default: latest)."
@@ -220,7 +220,7 @@ def copy(
     console.print(f"[green]Copied [{row.idx}] → [{new_idx}] ({new_uid}).[/green]")
 
 
-@app.command()
+@app.command(rich_help_panel="Core")
 def edit(
     ref: str | None = typer.Argument(
         None, help="Entry index or shortcut to edit (default: latest)."
@@ -447,7 +447,7 @@ def _list_memos_impl(
         console.print(f"[dim]Page {page}/{total_pages} — next: koda l -p {page + 1}[/dim]")
 
 
-@app.command(name="list")
+@app.command(name="list", rich_help_panel="Core")
 def list_memos(
     ref: str | None = typer.Argument(
         None,
@@ -535,7 +535,7 @@ def list_memos(
     )
 
 
-@app.command()
+@app.command(rich_help_panel="Core")
 def show(
     ref: str | None = typer.Argument(None, help="Entry index or shortcut (default: latest)."),
     json_output: bool = typer.Option(
@@ -570,7 +570,7 @@ def show(
     )
 
 
-@app.command()
+@app.command(rich_help_panel="Core")
 def raw(
     entry_refs: list[str] | None = typer.Argument(
         None,
@@ -607,7 +607,7 @@ def raw(
             emit_raw(ref, vars)
 
 
-@app.command()
+@app.command(rich_help_panel="Core")
 def tag(
     indices: list[str] = typer.Argument(..., help="Entry indices or ranges (e.g. 1 3 5-8)."),
     tags: list[str] | None = typer.Option(None, "--tag", "-t", help="Tag(s) to add."),

@@ -46,7 +46,7 @@ def _run_pick_action(action: str, ref: str) -> None:
     exit_error(f"Unsupported pick action: {action}")
 
 
-@app.command(name="exec")
+@app.command(name="exec", rich_help_panel="Core")
 def exec_memo(
     ref: str | None = typer.Argument(
         None, help="Entry index or shortcut to execute (default: latest)."
@@ -137,7 +137,7 @@ def exec_memo(
     os.execvp(shell, [shell, "-c", content])
 
 
-@app.command()
+@app.command(rich_help_panel="Core")
 def pick(
     query: str | None = typer.Option(None, "--query", "-q", help="Substring match on memo body."),
     tag: str | None = typer.Option(None, "--tag", "-t", help="Substring match on tags."),

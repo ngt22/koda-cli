@@ -8,7 +8,7 @@ from ..main import app
 from ..runtime import console, get_db, init_db
 
 
-@app.command(name="move")
+@app.command(name="move", rich_help_panel="Index")
 def move(
     from_idx: int = typer.Argument(..., help="Source display index."),
     to_idx: int = typer.Argument(..., help="Destination display index (must be empty)."),
@@ -39,7 +39,7 @@ def move(
         console.print(f"[green]Moved {from_idx} → {to_idx}.[/green]")
 
 
-@app.command(name="shift")
+@app.command(name="shift", rich_help_panel="Index")
 def shift_cmd(
     start: int = typer.Argument(..., help="Shift entries at this index and above."),
     count: int = typer.Option(
@@ -90,7 +90,7 @@ def shift_cmd(
     console.print(f"[green]Shifted entries from index {start} by {count:+d}.[/green]")
 
 
-@app.command(name="swap")
+@app.command(name="swap", rich_help_panel="Index")
 def swap(
     idx1: int = typer.Argument(..., help="First display index."),
     idx2: int = typer.Argument(..., help="Second display index."),
@@ -120,7 +120,7 @@ def swap(
         console.print(f"[green]Swapped {idx1} ↔ {idx2}.[/green]")
 
 
-@app.command(name="compact")
+@app.command(name="compact", rich_help_panel="Index")
 def compact_indices(
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Show what would change without modifying the database."
