@@ -25,7 +25,13 @@ def looks_like_koda_footer(segment: str) -> bool:
     if s.startswith("# Metadata"):
         return True
     lines = [ln for ln in s.splitlines() if ln.strip()]
-    return bool(lines and lines[0].strip().startswith("tags:"))
+    if not lines:
+        return False
+    first = lines[0].strip()
+    # Accept a footer whose first metadata line is either `tags:` or `title:`
+    # so a hand-trimmed footer (with the `# Metadata` header removed) still
+    # parses correctly.
+    return first.startswith("tags:") or first.startswith("title:")
 
 
 def first_footer_index(parts: list[str]) -> int | None:

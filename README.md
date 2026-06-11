@@ -150,6 +150,7 @@ Single-letter aliases are reserved and cannot be used as entry shortcuts.
 |---|---|
 | `-s` / `--shortcut` | Assign a memorable alias to an entry |
 | `-t` / `--tag` | Assign tags (on `add`) or filter by tag |
+| `--title` | Assign a human-readable display label (on `add`; editable via `edit`) |
 | `-V` / `--var` | Variable substitution at recall time |
 
 ## Installation
@@ -193,8 +194,11 @@ Save a new entry from arguments, heredoc, stdin, or `$EDITOR`.
 ```bash
 koda a "docker compose up --build" -t docker -s dc
 koda a "npm run dev" -t work
+koda a "psql -h localhost -U admin" --title "Local Postgres"
 koda a              # opens $EDITOR
 ```
+
+Use `--title` to attach a human-readable display label (single line). The title is shown by `koda show` and is also matched by `-q/--query` searches.
 
 Heredoc for multi-line content:
 
@@ -282,7 +286,7 @@ koda s 5    # → echo hello  # this is a comment
 
 ```bash
 koda l                          # all entries ordered by display index
-koda l -q "docker"              # substring search on body
+koda l -q "docker"              # substring search on body or title
 koda l -t linux                 # filter by tag substring
 koda l -T archive               # exclude entries tagged "archive"
 koda l -S                       # only entries that have a shortcut
@@ -395,12 +399,26 @@ koda x greet -V world   # → hi world
 
 ### Edit
 
-Open an entry in `$EDITOR`. The footer contains editable metadata (tags, shortcut).
+Open an entry in `$EDITOR`. The footer contains editable metadata (title, tags, shortcut).
 
 ```bash
 koda e web-srv        # by shortcut
 koda e 5              # by index
 ```
+
+The metadata footer template:
+
+```
+---
+# Metadata
+title: My Deploy Script
+tags: docker,work
+shortcut: dc
+created_at: 2026-01-01 00:00:00
+---
+```
+
+Edit the `title:` value to change it; leave the value blank to clear the title. If the entire footer is deleted, the existing title is preserved along with the other metadata.
 
 ---
 

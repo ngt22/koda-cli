@@ -44,6 +44,23 @@ def _validate_shortcut(shortcut: str | None) -> str | None:
     return shortcut
 
 
+def _validate_title(title: str | None) -> str | None:
+    """Strip and validate a title value.
+
+    Explicit empty/whitespace → error (user passed --title but gave nothing).
+    Newline in value → error (title must be a single line).
+    Otherwise return the stripped value, or None when the input is None.
+    """
+    if title is None:
+        return None
+    stripped = title.strip()
+    if not stripped:
+        exit_error("Title cannot be empty. Omit --title to save without one.")
+    if "\n" in title:
+        exit_error("Title must be a single line.")
+    return stripped
+
+
 def update_memo_full(
     memo_id: int,
     content: str,
@@ -63,8 +80,10 @@ def _add_impl(
     quiet: bool = False,
     print_uid: bool = False,
     print_idx: bool = False,
+    title: str | None = None,
 ) -> None:
     shortcut = _validate_shortcut(shortcut)
+    title = _validate_title(title)
     init_db()
     content = ""
 
@@ -98,7 +117,7 @@ def _add_impl(
     uid = _generate_uid(content, now)
     try:
         new_idx = get_db().add_memo_auto_idx(
-            uid, shortcut, content, formatted_tags, now, now, title=None
+            uid, shortcut, content, formatted_tags, now, now, title=title
         )
     except _IntegrityErrors:
         exit_error(f"Shortcut {shortcut!r} is already in use.")
@@ -110,6 +129,7 @@ def _add_impl(
     if not quiet:
         meta = f" | tags: {formatted_tags}" if formatted_tags else ""
         meta += f" | sc=[bold green]{shortcut}[/bold green]" if shortcut else ""
+        meta += f" | title: {title}" if title else ""
         console.print(f"[green]Saved [{new_idx}] ({uid}){meta}[/green]")
 
 
@@ -124,6 +144,9 @@ def add(
     shortcut: str | None = typer.Option(
         None, "--shortcut", "-s", help="Short alias for this entry (e.g. 'deploy')."
     ),
+    title: str | None = typer.Option(
+        None, "--title", help="Human-readable display label (single line, no alias)."
+    ),
     quiet: bool = typer.Option(
         False, "--quiet", help="Suppress the success message (for scripting)."
     ),
@@ -135,7 +158,9 @@ def add(
     ),
 ):
     """Create an entry from arguments, stdin, or your editor. Alias: `koda a`."""
-    _add_impl(text, tag, shortcut, quiet=quiet, print_uid=print_uid, print_idx=print_idx)
+    _add_impl(
+        text, tag, shortcut, quiet=quiet, print_uid=print_uid, print_idx=print_idx, title=title
+    )
 
 
 @app.command(name="remove", rich_help_panel="Core")
@@ -147,7 +172,7 @@ def rm(
         None, "--tag", "-t", help="Delete entries whose tags match this substring."
     ),
     query: str | None = typer.Option(
-        None, "--query", "-q", help="Delete entries whose body matches this substring."
+        None, "--query", "-q", help="Substring match on memo body or title."
     ),
     all_entries: bool = typer.Option(False, "--all", help="Delete ALL entries (requires -f)."),
     force: bool = typer.Option(False, "--force", "-f", help="Delete without prompting."),
@@ -203,7 +228,15 @@ def rm(
     else:
         ref = indices[0] if indices else None
         row = resolve_ref(ref)
-        _print_memo(row.uid, row.idx, row.shortcut, row.content, row.tags, row.created_at)
+        _print_memo(
+            row.uid,
+            row.idx,
+            row.shortcut,
+            row.content,
+            row.tags,
+            row.created_at,
+            title=row.title,
+        )
         console.print("\n[bold red]This entry will be deleted.[/bold red]")
 
         if not force and not confirm("Delete this entry?"):
@@ -252,8 +285,10 @@ def edit(
     )
 
     sc_line = f"shortcut: {shortcut}" if shortcut else "shortcut: "
+    title_line = f"title: {row.title}" if row.title else "title: "
     template = (
-        f"{content}\n\n---\n# Metadata\ntags: {tags}\n{sc_line}\ncreated_at: {created_at}\n---"
+        f"{content}\n\n---\n# Metadata\n{title_line}\ntags: {tags}\n"
+        f"{sc_line}\ncreated_at: {created_at}\n---"
     )
 
     with tempfile.NamedTemporaryFile(
@@ -276,32 +311,51 @@ def edit(
             new_content = "\n---\n".join(parts[:footer_at]).strip()
             meta_section = last_footer_segment(parts) or ""
             new_tags, new_shortcut, new_created_at = tags, shortcut, created_at
+            # If the footer is present, pick up the title from it; an empty
+            # value means "clear" (same contract as shortcut:). If the user
+            # deletes the footer entirely the no-footer branch preserves it.
+            new_title: str | None = row.title
+            footer_has_title_line = False
             for line in meta_section.splitlines():
-                if line.startswith("tags:"):
+                if line.startswith("title:"):
+                    footer_has_title_line = True
+                    val = line.removeprefix("title:").strip()
+                    # Empty value clears the title; non-empty goes through the
+                    # newline guard only (an empty value here means "clear").
+                    if not val:
+                        new_title = None
+                    elif "\n" in val:
+                        exit_error("Title must be a single line.")
+                    else:
+                        new_title = val
+                elif line.startswith("tags:"):
                     new_tags = line.removeprefix("tags:").strip()
                 elif line.startswith("shortcut:"):
                     val = line.removeprefix("shortcut:").strip()
                     new_shortcut = val if val else None
                 elif line.startswith("created_at:"):
                     new_created_at = line.removeprefix("created_at:").strip()
+            # If the footer existed but had no title: line at all (hand-edited
+            # footer without the title key), preserve the existing title.
+            if not footer_has_title_line:
+                new_title = row.title
             new_shortcut = _validate_shortcut(new_shortcut)
 
             try:
-                # title has no footer field yet (follow-up issue), so pass the
-                # existing value through unchanged — editing must not wipe it.
                 update_memo_full(
                     memo_id,
                     new_content,
                     new_tags,
                     new_shortcut,
                     new_created_at,
-                    title=row.title,
+                    title=new_title,
                 )
             except _IntegrityErrors:
                 exit_error(f"Shortcut {new_shortcut!r} is already in use.")
             if not quiet:
                 console.print(f"[green]Entry [{idx}] updated.[/green]")
         else:
+            # No footer detected: content-only update; all metadata preserved.
             new_content = "\n---\n".join(parts).strip() if parts else new_data.strip()
             update_memo_full(memo_id, new_content, tags, shortcut, created_at, title=row.title)
             if not quiet:
@@ -474,7 +528,9 @@ def list_memos(
         None,
         help="If given, show that single entry (index or shortcut) instead of the table.",
     ),
-    query: str | None = typer.Option(None, "--query", "-q", help="Substring match on memo body."),
+    query: str | None = typer.Option(
+        None, "--query", "-q", help="Substring match on memo body or title."
+    ),
     tag: str | None = typer.Option(None, "--tag", "-t", help="Substring match on tags."),
     exclude_tag: str | None = typer.Option(
         None,
@@ -588,6 +644,7 @@ def show(
         row.created_at,
         row.modified_at,
         row.source,
+        title=row.title,
     )
 
 
