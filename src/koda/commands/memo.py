@@ -588,13 +588,13 @@ def list_memos(
         False, "--shortcuts", "-S", help="Show only entries that have a shortcut."
     ),
     per_page: int | None = typer.Option(
-        None, "--per-page", "-n", help="Entries per page. [config: list.per_page]"
+        None, "--per-page", "-l", help="Entries per page. [config: list.per_page]"
     ),
     page: int = typer.Option(1, "--page", "-p", min=1, help="1-based page number to display."),
     sort_by: str | None = typer.Option(
         None,
         "--sort-by",
-        "-s",
+        "-b",
         case_sensitive=False,
         help=(
             "Sort column: id, idx, uid, tags, content, created_at, modified_at, shortcut. "
