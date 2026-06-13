@@ -43,7 +43,7 @@ def move(
 def shift_cmd(
     start: int = typer.Argument(..., help="Shift entries at this index and above."),
     count: int = typer.Option(
-        1, "--count", "-n", help="Positions to shift (negative = shift down)."
+        1, "--count", "-c", help="Positions to shift (negative = shift down)."
     ),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Show what would change without modifying the database."

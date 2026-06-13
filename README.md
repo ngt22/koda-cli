@@ -290,8 +290,8 @@ koda l -q "docker"              # substring search on body or title
 koda l -t linux                 # filter by tag substring
 koda l -T archive               # exclude entries tagged "archive"
 koda l -S                       # only entries that have a shortcut
-koda l -n 50 -p 2              # 50 entries per page, page 2
-koda l -s created_at --desc     # sort by creation date descending
+koda l -l 50 -p 2              # 50 entries per page, page 2
+koda l -b created_at --desc     # sort by creation date descending
 koda l --columns idx,uid,sc,tags,content,created_at   # all columns
 koda l --columns idx,content    # minimal view
 koda l -d body                  # show body preview in content column
@@ -541,8 +541,8 @@ Each entry has a display index (`IDX`) you can freely rearrange — useful for k
 koda w 3 0        # swap display positions of entries 3 and 0
 koda m 7 1        # move entry 7 to empty position 1
 koda h 1          # shift entries at index 1+ up by 1 (makes room at 1)
-koda h 1 -n 3     # shift up by 3 positions
-koda h 5 -n -1    # shift entries from index 5 downward by 1
+koda h 1 -c 3     # shift up by 3 positions
+koda h 5 -c -1    # shift entries from index 5 downward by 1
 koda k            # reassign all indices to 0..n-1, fill gaps
 ```
 
