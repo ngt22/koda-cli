@@ -8,6 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `-n` is now the short flag for `--dry-run` on `move`, `shift`, `compact`,
+  `tag`, and `pull`, matching `exec`. Previously only `exec --dry-run` had a
+  `-n` short form.
+
+### Changed
+- Single-letter short flags now map to one meaning per letter across commands.
+  `-s` is reserved for `--shortcut` (`add`) and `-n` for `--dry-run` (`exec`).
+  The colliding everyday value flags were renamed: `list --sort-by` `-s` → `-b`,
+  `list --per-page` `-n` → `-l`, and `shift --count` `-n` → `-c`. `pick`'s action
+  flags (`-p`/`-e`/`-x`/`-r`/`-s`/`-m`) mirror subcommand names and are kept.
+  **Breaking:** `koda list -s`, `koda list -n`, and `koda shift -n` no longer
+  work — use `-b`/`-l`/`-c` (long forms `--sort-by`/`--per-page`/`--count` are
+  unchanged). This also fixes the footgun where `koda shift -n` silently shifted
+  entries instead of previewing.
+
+## [1.3.0] - 2026-06-12
+
+### Added
 - `koda exec <ref> [args…]` now forwards trailing CLI arguments to the command.
   They become the shell's real positional parameters (`$1`, `$2`, `"$@"`); if the
   body doesn't reference them they are appended at the end (like a shell alias),
@@ -122,7 +140,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`move` / `swap` / `shift` / `compact`), shortcuts, tags, variable
   substitution, and a `config` subcommand.
 
-[Unreleased]: https://github.com/ngt22/koda-cli/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/ngt22/koda-cli/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/ngt22/koda-cli/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/ngt22/koda-cli/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/ngt22/koda-cli/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/ngt22/koda-cli/compare/v1.0.2...v1.1.0

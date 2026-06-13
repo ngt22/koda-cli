@@ -865,7 +865,7 @@ The sync remote is **outside your trust boundary**. Anyone who can write to it (
 - **The `source` flag never crosses the wire.** It is local-only state and is not written to (or read from) `koda-sync.jsonl`, so a remote cannot label its own entries `local` to dodge the prompt.
 
 ```bash
-koda pull --dry-run     # show what would change, write nothing
+koda pull --dry-run     # (or -n) show what would change, write nothing
 koda pull               # merge; new/updated entries become source=remote
 koda x deploy           # prompts because 'deploy' came from the remote
 koda edit deploy        # review it → trusted (source=local), no more prompts

@@ -749,7 +749,7 @@ def tag(
     tags: list[str] | None = typer.Option(None, "--tag", "-t", help="Tag(s) to add."),
     untag: list[str] | None = typer.Option(None, "--untag", "-T", help="Tag(s) to remove."),
     dry_run: bool = typer.Option(
-        False, "--dry-run", help="Show what would change without modifying the database."
+        False, "--dry-run", "-n", help="Show what would change without modifying the database."
     ),
     quiet: bool = typer.Option(False, "--quiet", help="Suppress the success message."),
 ):
