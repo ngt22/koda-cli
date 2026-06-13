@@ -151,6 +151,7 @@ def pull(
     dry_run: bool = typer.Option(
         False,
         "--dry-run",
+        "-n",
         help="Show the insert/update diff without modifying the local database.",
     ),
 ):

@@ -13,7 +13,7 @@ def move(
     from_idx: int = typer.Argument(..., help="Source display index."),
     to_idx: int = typer.Argument(..., help="Destination display index (must be empty)."),
     dry_run: bool = typer.Option(
-        False, "--dry-run", help="Show what would change without modifying the database."
+        False, "--dry-run", "-n", help="Show what would change without modifying the database."
     ),
     quiet: bool = typer.Option(False, "--quiet", help="Suppress the success message."),
 ):
@@ -46,7 +46,7 @@ def shift_cmd(
         1, "--count", "-c", help="Positions to shift (negative = shift down)."
     ),
     dry_run: bool = typer.Option(
-        False, "--dry-run", help="Show what would change without modifying the database."
+        False, "--dry-run", "-n", help="Show what would change without modifying the database."
     ),
 ):
     """Shift all entries at START and above by COUNT positions. Alias: `koda h`."""
@@ -123,7 +123,7 @@ def swap(
 @app.command(name="compact", rich_help_panel="Index")
 def compact_indices(
     dry_run: bool = typer.Option(
-        False, "--dry-run", help="Show what would change without modifying the database."
+        False, "--dry-run", "-n", help="Show what would change without modifying the database."
     ),
 ):
     """Fill index gaps by reassigning idx to contiguous values from 0. Alias: `koda k`."""
