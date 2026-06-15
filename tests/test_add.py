@@ -81,3 +81,17 @@ def test_no_arg_no_stdin_uses_editor(wired_db, monkeypatch):
     monkeypatch.setattr("koda.runtime.subprocess.call", fake_call)
     memo._add_impl(text=None)
     assert _latest_content(wired_db) == "from editor"
+
+
+def test_add_defaults_to_local_source(wired_db, monkeypatch):
+    monkeypatch.setattr("sys.stdin", FakeStdin(tty=True))
+    memo._add_impl(text=["plain entry"])
+    assert wired_db.get_latest_entry().source == "local"
+
+
+def test_add_remote_marks_source_remote(wired_db, monkeypatch):
+    """`koda add --remote` (source='remote') so exec gates on review. Used by
+    AI agents that save entries unattended."""
+    monkeypatch.setattr("sys.stdin", FakeStdin(tty=True))
+    memo._add_impl(text=["agent entry"], source="remote")
+    assert wired_db.get_latest_entry().source == "remote"

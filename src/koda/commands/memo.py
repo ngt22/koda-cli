@@ -82,6 +82,7 @@ def _add_impl(
     print_uid: bool = False,
     print_idx: bool = False,
     title: str | None = None,
+    source: str = "local",
 ) -> None:
     shortcut = _validate_shortcut(shortcut)
     title = _validate_title(title)
@@ -118,7 +119,7 @@ def _add_impl(
     uid = _generate_uid(content, now)
     try:
         new_idx = get_db().add_memo_auto_idx(
-            uid, shortcut, content, formatted_tags, now, now, title=title
+            uid, shortcut, content, formatted_tags, now, now, title=title, source=source
         )
     except _IntegrityErrors:
         exit_error(f"Shortcut {shortcut!r} is already in use.")
@@ -157,10 +158,23 @@ def add(
     print_idx: bool = typer.Option(
         False, "--print-idx", help="Print the new entry's idx to stdout."
     ),
+    remote: bool = typer.Option(
+        False,
+        "--remote",
+        help="Save as unreviewed (source=remote); requires review via "
+        "`koda edit` before `koda exec` runs it without prompting.",
+    ),
 ):
     """Create an entry from arguments, stdin, or your editor. Alias: `koda a`."""
     _add_impl(
-        text, tag, shortcut, quiet=quiet, print_uid=print_uid, print_idx=print_idx, title=title
+        text,
+        tag,
+        shortcut,
+        quiet=quiet,
+        print_uid=print_uid,
+        print_idx=print_idx,
+        title=title,
+        source="remote" if remote else "local",
     )
 
 

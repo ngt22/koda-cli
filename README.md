@@ -22,6 +22,7 @@ A **text store** for the terminal. Save any text — commands, paths, templates,
 - [Turso (remote database)](#turso-remote-database)
 - [Git sync](#git-sync-multi-machine-sharing-via-github)
 - [Example uses](#example-uses)
+- [koda for AI](#koda-for-ai-experimental)
 - [Security model](#security-model)
 - [Development](#development)
 - [License](#license)
@@ -151,6 +152,7 @@ Single-letter aliases are reserved and cannot be used as entry shortcuts.
 | `-s` / `--shortcut` | Assign a memorable alias to an entry |
 | `-t` / `--tag` | Assign tags (on `add`) or filter by tag |
 | `--title` | Assign a human-readable display label (on `add`; editable via `edit`) |
+| `--remote` | Save as unreviewed (`source=remote`) so `exec` requires review first — for AI agents (on `add`) |
 | `-V` / `--var` | Variable substitution at recall time |
 
 ## Installation
@@ -221,6 +223,11 @@ Content source precedence: **text arguments > piped stdin > `$EDITOR`**. When
 arguments are given, piped stdin is ignored (with a warning on stderr). This
 keeps `koda a "text"` working in non-interactive shells (cron, IDE tasks,
 sandboxes) where stdin is not a TTY.
+
+`--remote` saves the entry as unreviewed (`source=remote`), the same trust state
+as a pulled entry, so `koda x` requires confirmation (or `koda edit` review)
+before running it. It is meant for AI agents that save entries unattended — see
+[koda for AI](#koda-for-ai-experimental).
 
 ---
 
@@ -966,6 +973,37 @@ koda x backup   # creates src-20260505-1430.tar.gz each time
 ```
 
 → **[See all examples in EXAMPLES.md](EXAMPLES.md)**
+
+---
+
+## koda for AI (experimental)
+
+Because koda is a plain CLI with `--json` output and scriptable flags, an AI
+agent (Claude Code, etc.) can use the same store you use from the terminal —
+saving prompts it writes, recalling them with variables filled in, and stashing
+results as entries. A ready-made **Claude Code skill** lives in
+[`extras/claude-skill/`](extras/claude-skill/); copy `SKILL.md` to
+`~/.claude/skills/koda-cli/` (see that directory's README).
+
+The skill teaches the agent four moves, all built on existing commands:
+
+| Intent | Command |
+|---|---|
+| Save a prompt / command / result | `koda add "<content>" -t <tag> --remote --print-idx --quiet` |
+| Browse or search | `koda list --json [-q <substr>] [-t <tag>]` |
+| Recall a body, filling variables | `koda raw <ref> -V KEY=value` |
+| Run a saved command | the agent hands you `koda x <ref>` to run yourself |
+
+**Two kinds of "run".** A saved *prompt* (natural language) is "run" by the
+agent recalling it with `koda raw` and following it — no shell involved. A saved
+*shell command* is run with `koda x`, which the agent leaves to you.
+
+**Trust boundary.** Entries an agent saves use `--remote`, marking them
+`source=remote` (unreviewed) — the same gate as pulled entries. `koda x` refuses
+to run a `remote` entry in a non-interactive shell and prompts otherwise, so a
+prompt-injected or mistaken command cannot run silently. You review and trust an
+entry with `koda edit <ref>`, which clears the flag. See
+[Security model](#security-model) and [Remote trust boundary](#remote-trust-boundary).
 
 ---
 

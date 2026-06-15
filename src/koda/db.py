@@ -329,13 +329,14 @@ class MemoDatabase:
         created_at: str,
         modified_at: str,
         title: str | None = None,
+        source: str = "local",
     ) -> None:
         with self.connection() as conn:
             conn.execute(
                 "INSERT INTO memos "
-                "(uid, idx, shortcut, content, tags, created_at, modified_at, title) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (uid, idx, shortcut or None, content, tags, created_at, modified_at, title),
+                "(uid, idx, shortcut, content, tags, created_at, modified_at, title, source) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (uid, idx, shortcut or None, content, tags, created_at, modified_at, title, source),
             )
 
     def add_memo_auto_idx(
@@ -347,18 +348,33 @@ class MemoDatabase:
         created_at: str,
         modified_at: str,
         title: str | None = None,
+        source: str = "local",
     ) -> int:
         """Insert a memo at the next free display index, allocated atomically in
         the same transaction, and return that idx. Raises ``IntegrityErrors`` on
         a shortcut clash so callers can report it. Centralizes the INSERT that
-        ``add`` and ``copy`` previously inlined."""
+        ``add`` and ``copy`` previously inlined.
+
+        ``source`` defaults to 'local'; callers pass 'remote' for entries that
+        were authored by an unattended agent and must be reviewed (``koda edit``)
+        before ``koda exec`` will run them without prompting."""
         with self.connection() as conn:
             new_idx = self.next_idx(conn)
             conn.execute(
                 "INSERT INTO memos "
-                "(uid, idx, shortcut, content, tags, created_at, modified_at, title) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (uid, new_idx, shortcut or None, content, tags, created_at, modified_at, title),
+                "(uid, idx, shortcut, content, tags, created_at, modified_at, title, source) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    uid,
+                    new_idx,
+                    shortcut or None,
+                    content,
+                    tags,
+                    created_at,
+                    modified_at,
+                    title,
+                    source,
+                ),
             )
         return new_idx
 
