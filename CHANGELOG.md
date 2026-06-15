@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `koda add --remote` saves an entry as unreviewed (`source=remote`), the same
+  trust state as a pulled entry, so `koda exec` requires review/confirmation
+  before running it. Intended for AI agents that save entries unattended.
+- Experimental "koda for AI": a Claude Code skill in `extras/claude-skill/`
+  (`SKILL.md` + README) that lets an agent save, search, recall, and run
+  prompts/snippets through the existing koda CLI. Agent-saved entries use
+  `--remote` so nothing executes without human review.
+
 ## [1.4.0] - 2026-06-13
 
 ### Added

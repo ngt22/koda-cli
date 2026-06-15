@@ -12,6 +12,7 @@ see the [highlights in the README](README.md#example-uses).
 - [Development](#development)
 - [Cross-machine](#cross-machine)
 - [Local LLM](#local-llm)
+- [AI agents (Claude Code)](#ai-agents-claude-code)
 
 ---
 
@@ -311,4 +312,32 @@ EOF
 
 koda x llm -V "What is the time complexity of quicksort?"
 koda x llm -V "Summarize the last git commit"
+```
+
+## AI agents (Claude Code)
+
+With the [skill in `extras/claude-skill/`](extras/claude-skill/) installed, an
+agent uses the same koda store you do. The whole save → search → recall → run
+loop is just existing commands; agent-written entries get `--remote` so nothing
+executes without your review.
+
+```bash
+# Agent saves a reusable, parameterized prompt under a shortcut
+printf '%s' 'Review the following diff for correctness and security. Focus on ${AREA}. Be concise.' \
+  | koda add -t prompt --remote -s review --title "Code review prompt" --print-idx --quiet
+
+# Agent searches what's saved (JSON for the agent; `koda l -t prompt` for you)
+koda list --json -t prompt
+
+# Agent recalls the prompt, filling in a variable, then follows it as an instruction
+koda raw review -V AREA=authentication
+
+# Agent saves a result it produced
+printf '%s' '<investigation notes>' \
+  | koda add -t result --remote --title "Auth flow investigation" --print-idx --quiet
+
+# Agent saved a deploy command, but leaves running it to you (remote = review first)
+koda add 'kubectl apply -f ${MANIFEST}' -t cmd --remote -s deploy --print-idx --quiet
+koda edit deploy            # you review and trust it (clears the remote flag)
+koda x deploy -V MANIFEST=app.yaml
 ```

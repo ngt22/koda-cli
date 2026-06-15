@@ -67,3 +67,28 @@ class TestGetMemos:
         all_rows = db.get_memos(limit=None)
         page = db.get_memos(limit=7, offset=0)
         assert [r.uid for r in page] == [r.uid for r in all_rows[:7]]
+
+
+class TestSource:
+    def test_add_memo_auto_idx_defaults_to_local(self, db):
+        db.add_memo_auto_idx("u1", None, "body", "", "2026-01-01 00:00:00", "2026-01-01 00:00:00")
+        assert db.get_latest_entry().source == "local"
+
+    def test_add_memo_auto_idx_accepts_remote(self, db):
+        db.add_memo_auto_idx(
+            "u2", None, "body", "", "2026-01-01 00:00:00", "2026-01-01 00:00:00", source="remote"
+        )
+        assert db.get_latest_entry().source == "remote"
+
+    def test_add_memo_accepts_remote(self, db):
+        db.add_memo(
+            uid="u3",
+            idx=5,
+            shortcut=None,
+            content="body",
+            tags="",
+            created_at="2026-01-01 00:00:00",
+            modified_at="2026-01-01 00:00:00",
+            source="remote",
+        )
+        assert db.get_latest_entry().source == "remote"
