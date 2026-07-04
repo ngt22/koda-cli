@@ -76,9 +76,31 @@ def _has_upstream(vault: Path) -> bool:
     )
 
 
+def _git_or_exit(vault: Path, *args: str, hint: str = "") -> subprocess.CompletedProcess:
+    """Run a git command, exiting cleanly with git's own message (plus an optional
+    hint) instead of raising a raw traceback when it fails."""
+    result = _git(vault, *args, check=False)
+    if result.returncode != 0:
+        message = (result.stderr or result.stdout or "").strip()
+        suffix = f"\n\n{hint}" if hint else ""
+        exit_error(f"git {' '.join(args)} failed:\n{message}{suffix}")
+    return result
+
+
+_PUSH_HINT = (
+    "The remote has commits your vault does not. Run `koda pull` to merge them "
+    "first, or overwrite the remote with this vault via "
+    "`git -C ~/.koda-cli push --force origin <branch>` (discards the remote's history)."
+)
+_REBASE_HINT = (
+    "Resolve the conflicts in ~/.koda-cli, then `git -C ~/.koda-cli rebase --continue` "
+    "(or `git -C ~/.koda-cli rebase --abort` to back out)."
+)
+
+
 def _pull_rebase_if_remote(vault: Path) -> None:
     if _has_remote(vault) and _has_upstream(vault):
-        _git(vault, "pull", "--rebase")
+        _git_or_exit(vault, "pull", "--rebase", hint=_REBASE_HINT)
 
 
 def _push_if_remote(vault: Path) -> None:
@@ -89,10 +111,12 @@ def _push_if_remote(vault: Path) -> None:
         )
         return
     if _has_upstream(vault):
-        _git(vault, "push")
+        _git_or_exit(vault, "push", hint=_PUSH_HINT)
     else:
         # First push: create the upstream branch (mirrors the old sync helper).
-        _git(vault, "push", "-u", _first_remote(vault), _current_branch(vault))
+        _git_or_exit(
+            vault, "push", "-u", _first_remote(vault), _current_branch(vault), hint=_PUSH_HINT
+        )
 
 
 @app.command(rich_help_panel="Git sync")
