@@ -18,7 +18,11 @@ from ..main import app
 from ..reconcile import reconcile_all
 from ..runtime import console, get_db, get_entries_dir, get_vault, init_db
 
-_GITIGNORE_LINE = ".koda/"
+# Kept out of sync: the local cache/trust ledger, and Obsidian's per-machine app
+# state (workspace, plugins) which would otherwise churn and conflict across
+# machines. Users who deliberately want to sync Obsidian config can remove the
+# line from their vault's .gitignore.
+_GITIGNORE_LINES = (".koda/", ".obsidian/")
 
 
 def _require_git() -> None:
@@ -37,15 +41,16 @@ def _is_repo(vault: Path) -> bool:
 
 
 def _ensure_repo(vault: Path) -> None:
-    """Make the vault a git repo (first run) and keep ``.koda/`` git-ignored."""
+    """Make the vault a git repo (first run) and keep the cache and Obsidian
+    app-state git-ignored."""
     vault.mkdir(parents=True, exist_ok=True)
     if not _is_repo(vault):
         _git(vault, "init")
     gitignore = vault / ".gitignore"
     lines = gitignore.read_text(encoding="utf-8").splitlines() if gitignore.exists() else []
-    if _GITIGNORE_LINE not in lines:
-        lines.append(_GITIGNORE_LINE)
-        gitignore.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    missing = [line for line in _GITIGNORE_LINES if line not in lines]
+    if missing:
+        gitignore.write_text("\n".join(lines + missing) + "\n", encoding="utf-8")
 
 
 def _has_remote(vault: Path) -> bool:
