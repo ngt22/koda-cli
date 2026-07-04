@@ -7,29 +7,20 @@ message reports actual per-tag add/remove totals.
 """
 
 import pytest
+from _helpers import put_entry
 
-import koda.runtime as runtime
 from koda.commands import memo
 from koda.constants import TAG_SEPARATOR
 
 
 @pytest.fixture
-def wired_db(db, monkeypatch):
-    """Point the lazy DB cache at a fresh temp database."""
-    monkeypatch.setattr(runtime, "_db", db)
+def wired_db(db):
+    """The vault-backed cache."""
     return db
 
 
 def _seed(db, idx, tags):
-    db.add_memo(
-        uid=f"uid{idx:04d}",
-        idx=idx,
-        shortcut=None,
-        content=f"entry {idx}",
-        tags=TAG_SEPARATOR.join(tags),
-        created_at="2026-01-01 00:00:00",
-        modified_at="2026-01-01 00:00:00",
-    )
+    put_entry(f"entry {idx}", idx=idx, tags=TAG_SEPARATOR.join(tags), uid=f"uid{idx:04d}00000000")
 
 
 def _tags(db, idx):

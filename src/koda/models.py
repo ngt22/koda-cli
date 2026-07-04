@@ -12,7 +12,7 @@ class MemoRow:
 
     Field order matches the canonical SELECT projection used across the
     database layer: id, uid, idx, content, tags, shortcut, created_at,
-    modified_at, source, title.
+    modified_at, source, title, description.
 
     ``source`` is a local trust annotation ('local' = authored or reviewed on
     this machine; 'remote' = brought in by a Git sync and not yet reviewed). It
@@ -34,12 +34,13 @@ class MemoRow:
     modified_at: str | None = ""
     source: str = "local"
     title: str | None = None
+    description: str | None = None
 
     @classmethod
     def from_row(cls, row) -> Optional["MemoRow"]:
         if row is None:
             return None
-        assert len(row) == 10, f"expected 10 columns, got {len(row)}"
+        assert len(row) == 11, f"expected 11 columns, got {len(row)}"
         return cls(*row)
 
     @classmethod
@@ -62,4 +63,5 @@ class MemoRow:
             "modified_at": self.modified_at,
             "source": self.source,
             "title": self.title,
+            "description": self.description,
         }

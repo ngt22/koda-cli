@@ -18,7 +18,7 @@ def test_config_file_and_dir_modes(tmp_path):
 
 
 def test_db_file_and_dir_modes(tmp_path):
-    db_path = tmp_path / "dbdir" / "koda.db"
-    MemoDatabase(backend="local", path=db_path).init_db()
+    db_path = tmp_path / "dbdir" / "cache.db"
+    MemoDatabase(path=db_path).init_db()
     assert _mode(db_path) == 0o600
     assert _mode(db_path.parent) == 0o700

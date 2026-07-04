@@ -51,29 +51,27 @@ def test_get_config_is_lazy_and_cached(monkeypatch):
 
 def test_get_db_is_lazy_and_cached(monkeypatch, tmp_path):
     cfg = Config()
-    cfg.db_backend = "local"
-    cfg.db_path = str(tmp_path / "lazy.db")
-    cfg.turso_url = ""
-    cfg.turso_token = ""
+    cfg.vault_path = str(tmp_path / "vault")
 
-    # A temp path lives outside the koda data dir; the override env lets tests
-    # use it (the same escape hatch CI relies on).
+    # A temp vault lives outside $HOME; the override env lets tests use it
+    # (the same escape hatch CI relies on).
     monkeypatch.setenv("KODA_DB_PATH_OVERRIDE", "1")
     monkeypatch.setattr(runtime, "_db", None)
     monkeypatch.setattr(runtime, "get_config", lambda: cfg)
 
     db = runtime.get_db()
     assert isinstance(db, MemoDatabase)
+    # The cache lives under the vault's .koda directory.
+    assert db.path == tmp_path / "vault" / ".koda" / "cache.db"
     # Second call returns the cached handle.
     assert runtime.get_db() is db
 
 
-def test_get_db_rejects_path_outside_data_dir(monkeypatch):
-    """A local db.path outside the data dir (e.g. via KODA_DB_PATH injection)
-    is refused before any file is created."""
+def test_get_db_rejects_vault_outside_home(monkeypatch):
+    """A vault.path outside $HOME (e.g. via KODA_VAULT_PATH injection) is
+    refused before any file is created."""
     cfg = Config()
-    cfg.db_backend = "local"
-    cfg.db_path = "/tmp/evil.db"
+    cfg.vault_path = "/tmp/evil-vault"
 
     monkeypatch.delenv("KODA_DB_PATH_OVERRIDE", raising=False)
     monkeypatch.setattr(runtime, "_db", None)

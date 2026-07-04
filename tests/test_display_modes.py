@@ -2,8 +2,8 @@
 
 import pytest
 import typer
+from _helpers import put_entry
 
-import koda.runtime as runtime
 from koda.cmd_helpers.interactive import _fzf_line
 from koda.commands import memo
 from koda.config import ALL_KEYS, ConfigManager, ValidationError
@@ -13,24 +13,13 @@ from koda.models import MemoRow
 
 
 @pytest.fixture
-def wired_db(db, monkeypatch):
-    """Point the lazy DB cache at a fresh temp database."""
-    monkeypatch.setattr(runtime, "_db", db)
+def wired_db(db):
+    """The vault-backed cache."""
     return db
 
 
 def _seed(db, content="body text", title=None, shortcut=None, idx=0):
-    db.add_memo(
-        f"uid{idx:04d}",
-        idx,
-        shortcut,
-        content,
-        "",
-        "2026-01-01 00:00:00",
-        "2026-01-01 00:00:00",
-        title=title,
-    )
-    return db.get_memo_by_idx(idx)
+    return put_entry(content, idx=idx, shortcut=shortcut, title=title, uid=f"uid{idx:04d}00000000")
 
 
 # ── display mode: body ────────────────────────────────────────────────────────

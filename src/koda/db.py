@@ -1,41 +1,45 @@
-"""Database layer for koda: connection, schema, CRUD over the memos table."""
+"""Local cache over the Markdown entry store.
+
+The source of truth is the ``.md`` files under ``<vault>/entries`` (see
+``md_store``). This module is a **disposable, rebuildable SQLite cache** that
+exists only for fast queries and for the local-only trust ledger:
+
+- fast ``list`` / search / sort without parsing every file each run;
+- the ``source`` (local/remote) trust state, which must NOT be synced;
+- ``blessed_hash`` — the content koda last authored/reviewed, so an external
+  edit (Obsidian / AI / git pull) is detected and marked ``source='remote'``.
+
+The cache lives at ``<vault>/.koda/cache.db`` and can be dropped and rebuilt
+from the ``.md`` files at any time (``koda reindex``). ``reconcile`` keeps it in
+sync on every run; nothing here is authoritative.
+"""
 
 import hashlib
 import os
 import sqlite3
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
 from .models import MemoRow
 
 # Number of hex chars kept from the sha1 hash to form a uid. 16 hex = 64 bits,
-# chosen so birthday/preimage attacks against the sync merge key are infeasible
-# (the original 7 hex = 28 bits collided after ~16k entries). Widening is a
-# schema migration; see _migration_0002_widen_uid.
+# chosen so birthday/preimage attacks against the sync merge key are infeasible.
 UID_LENGTH = 16
 
 
 def compute_uid(content: str, created_at: str) -> str:
-    """Return the stable sync uid: first ``UID_LENGTH`` hex chars of
-    ``sha1(content + created_at)``. Deterministic across machines, so two peers
-    that hold the same entry derive the same uid (the merge key)."""
+    """Return the stable uid: first ``UID_LENGTH`` hex chars of
+    ``sha1(content + created_at)``. Deterministic across machines, so the same
+    entry derives the same uid everywhere. Stored in each ``.md``'s frontmatter
+    as the entry's identity; never recomputed on edit."""
     raw = f"{content}{created_at}".encode()
     return hashlib.sha1(raw).hexdigest()[:UID_LENGTH]
 
 
-try:
-    import libsql_experimental as _libsql
-
-    LIBSQL_AVAILABLE = True
-    try:
-        IntegrityErrors: tuple = (sqlite3.IntegrityError, _libsql.IntegrityError)
-    except AttributeError:
-        IntegrityErrors = (sqlite3.IntegrityError,)
-except ImportError:
-    _libsql = None
-    LIBSQL_AVAILABLE = False
-    IntegrityErrors = (sqlite3.IntegrityError,)
+# Kept as a tuple for a stable ``except IntegrityErrors:`` idiom across the code
+# base (previously spanned sqlite3 + libsql; now sqlite3 only).
+IntegrityErrors: tuple = (sqlite3.IntegrityError,)
 
 
 VALID_SORT_COLUMNS = {
@@ -48,178 +52,112 @@ VALID_SORT_COLUMNS = {
     "modified_at",
     "shortcut",
     "title",
+    "description",
 }
 
 
 class DatabaseError(RuntimeError):
-    """Backend configuration error (missing driver, missing URL, etc.)."""
+    """Cache configuration error (missing path, etc.)."""
 
 
-def _migration_0001_initial_schema(conn) -> None:
-    """Create the memos table, ensure the shortcut column and its index.
+# Bump when the cache schema changes; a mismatch drops and rebuilds the cache
+# (it is derived data, so this is always safe).
+CACHE_SCHEMA_VERSION = 1
 
-    This is the schema that predates versioning, so every statement is
-    idempotent: applying it to an already-migrated database is a no-op,
-    while a fresh database gets the full current schema.
-    """
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS memos (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            uid         TEXT UNIQUE,
-            idx         INTEGER UNIQUE,
-            shortcut    TEXT,
-            content     TEXT,
-            tags        TEXT,
-            created_at  TIMESTAMP,
-            modified_at TIMESTAMP
-        )
-    """)
-    cols = {row[1] for row in conn.execute("PRAGMA table_info(memos)").fetchall()}
-    if "shortcut" not in cols:
-        conn.execute("ALTER TABLE memos ADD COLUMN shortcut TEXT")
-    conn.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_memos_shortcut "
-        "ON memos(shortcut) WHERE shortcut IS NOT NULL"
+# Projection materialised into a MemoRow (order must match MemoRow fields).
+_MEMO_COLUMNS = (
+    "id, uid, idx, content, tags, shortcut, created_at, modified_at, source, title, description"
+)
+
+_CREATE_TABLE = """
+    CREATE TABLE IF NOT EXISTS memos (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        uid          TEXT UNIQUE,
+        idx          INTEGER,
+        content      TEXT,
+        tags         TEXT,
+        shortcut     TEXT,
+        created_at   TIMESTAMP,
+        modified_at  TIMESTAMP,
+        source       TEXT NOT NULL DEFAULT 'local',
+        title        TEXT,
+        description  TEXT,
+        path         TEXT,
+        mtime        REAL,
+        body_hash    TEXT,
+        blessed_hash TEXT
     )
-
-
-def _migration_0002_widen_uid(conn) -> None:
-    """Widen uids from 7 to ``UID_LENGTH`` hex chars by recomputing each row's
-    uid from its current content + created_at.
-
-    uid = sha1(content + created_at)[:N], so for an unedited row the new uid
-    keeps the old 7-char value as its prefix; synced peers therefore converge
-    once both have migrated. A row whose content/created_at changed after
-    creation (uid is not refreshed on edit) gets a uid consistent with its
-    current text — its short prefix may change, which is why pull falls back to
-    a uid-prefix match for legacy short uids (see MemoMerger)."""
-    rows = conn.execute("SELECT id, content, created_at FROM memos").fetchall()
-    for memo_id, content, created_at in rows:
-        new_uid = compute_uid(content or "", created_at or "")
-        conn.execute("UPDATE memos SET uid = ? WHERE id = ?", (new_uid, memo_id))
-
-
-def _migration_0003_add_source(conn) -> None:
-    """Add the ``source`` column: 'local' for entries authored or reviewed on
-    this machine, 'remote' for entries brought in by a Git sync. Existing rows
-    are the user's own work, so they default to 'local'. The column is local
-    state only — it is never written to or read from the sync payload."""
-    cols = {row[1] for row in conn.execute("PRAGMA table_info(memos)").fetchall()}
-    if "source" not in cols:
-        conn.execute("ALTER TABLE memos ADD COLUMN source TEXT NOT NULL DEFAULT 'local'")
-
-
-def _migration_0004_add_title(conn) -> None:
-    """Add the nullable ``title`` column: a display-only, human-readable label.
-    Existing rows have no title, so the column stays NULL until set. It is
-    content (synced, unlike ``source``) but is never used to resolve a ref —
-    ``shortcut`` remains the only callable name."""
-    cols = {row[1] for row in conn.execute("PRAGMA table_info(memos)").fetchall()}
-    if "title" not in cols:
-        conn.execute("ALTER TABLE memos ADD COLUMN title TEXT")
-
-
-# Ordered list of schema migrations. Each entry N (0-based) advances the
-# database from PRAGMA user_version N to N+1. Append new migrations to the
-# end; never reorder or rewrite an existing one.
-_MIGRATIONS: list[Callable[[sqlite3.Connection], None]] = [
-    _migration_0001_initial_schema,
-    _migration_0002_widen_uid,
-    _migration_0003_add_source,
-    _migration_0004_add_title,
-]
-
-SCHEMA_VERSION = len(_MIGRATIONS)
+"""
 
 
 class MemoDatabase:
-    """SQLite / libsql backed CRUD wrapper for the memos table."""
+    """SQLite-backed cache/query layer over the Markdown entry store."""
 
-    def __init__(
-        self,
-        backend: str = "local",
-        path: Path | None = None,
-        turso_url: str = "",
-        turso_token: str = "",
-    ) -> None:
-        self.backend = backend
+    def __init__(self, path: Path | None = None) -> None:
         self.path = Path(path) if path else None
-        self.turso_url = turso_url
-        self.turso_token = turso_token
 
     @contextmanager
     def connection(self) -> Iterator:
-        if self.backend == "turso":
-            if not LIBSQL_AVAILABLE:
-                raise DatabaseError(
-                    "libsql-experimental is not installed. Run: pip install libsql-experimental"
-                )
-            if not self.turso_url:
-                raise DatabaseError(
-                    "Turso URL is not configured. "
-                    "Set turso.url in config or KODA_TURSO_URL env var."
-                )
-            conn = _libsql.connect(self.turso_url, auth_token=self.turso_token or None)
-            try:
-                yield conn
-            except Exception:
-                raise
-            else:
-                conn.commit()
-            finally:
-                conn.close()
+        if self.path is None:
+            raise DatabaseError("Cache path is not configured.")
+        conn = sqlite3.connect(self.path)
+        try:
+            yield conn
+        except Exception:
+            conn.rollback()
+            raise
         else:
-            if self.path is None:
-                raise DatabaseError("Local DB path is not configured.")
-            conn = sqlite3.connect(self.path)
-            try:
-                yield conn
-            except Exception:
-                conn.rollback()
-                raise
-            else:
-                conn.commit()
-            finally:
-                conn.close()
+            conn.commit()
+        finally:
+            conn.close()
 
     def init_db(self) -> None:
-        """Bring the schema up to date by applying pending migrations."""
-        if self.backend == "local" and self.path is not None:
+        """Ensure the cache exists at the current schema version, rebuilding it
+        from scratch on a version mismatch (cache is derived, so dropping is
+        safe; ``reconcile`` repopulates it)."""
+        if self.path is not None:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             os.chmod(self.path.parent, 0o700)
         with self.connection() as conn:
-            self._apply_migrations(conn)
-        if self.backend == "local" and self.path is not None:
+            version = conn.execute("PRAGMA user_version").fetchone()[0]
+            if version != CACHE_SCHEMA_VERSION:
+                conn.execute("DROP TABLE IF EXISTS memos")
+                conn.execute(_CREATE_TABLE)
+                conn.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_memos_shortcut "
+                    "ON memos(shortcut) WHERE shortcut IS NOT NULL AND shortcut != ''"
+                )
+                conn.execute(f"PRAGMA user_version = {CACHE_SCHEMA_VERSION}")
+            else:
+                conn.execute(_CREATE_TABLE)
+        if self.path is not None:
             os.chmod(self.path, 0o600)
 
-    @staticmethod
-    def _apply_migrations(conn) -> None:
-        """Run any migrations newer than the DB's PRAGMA user_version.
+    def clear(self) -> None:
+        """Drop all cached rows (used by ``reindex`` before a full rescan)."""
+        with self.connection() as conn:
+            conn.execute("DELETE FROM memos")
 
-        user_version starts at 0 (the default for databases created before
-        versioning existed, and for brand-new ones). Migration N takes the
-        schema from version N to N+1; we run them in order and bump
-        user_version after each so a crash mid-upgrade resumes cleanly.
-        """
-        current = conn.execute("PRAGMA user_version").fetchone()[0]
-        for version in range(current, len(_MIGRATIONS)):
-            _MIGRATIONS[version](conn)
-            # PRAGMA does not accept bound parameters; version is a trusted int.
-            conn.execute(f"PRAGMA user_version = {version + 1}")
-
+    # ------------------------------------------------------------------ #
+    # Reads (return MemoRow)
+    # ------------------------------------------------------------------ #
     @staticmethod
     def next_idx(conn) -> int:
         row = conn.execute("SELECT MAX(idx) FROM memos").fetchone()
         return (row[0] + 1) if row[0] is not None else 0
+
+    def allocate_idx(self) -> int:
+        """Return the next free display index."""
+        with self.connection() as conn:
+            return self.next_idx(conn)
 
     @staticmethod
     def _filters(query=None, tag=None, exclude_tag=None, shortcuts_only=False):
         sql = " WHERE 1=1"
         params: list = []
         if query:
-            # Match against both body and title so `-q` finds title-only hits.
-            sql += " AND (content LIKE ? OR title LIKE ?)"
-            params.extend([f"%{query}%", f"%{query}%"])
+            sql += " AND (content LIKE ? OR title LIKE ? OR description LIKE ?)"
+            params.extend([f"%{query}%", f"%{query}%", f"%{query}%"])
         if tag:
             sql += " AND tags LIKE ?"
             params.append(f"%{tag}%")
@@ -229,8 +167,6 @@ class MemoDatabase:
         if shortcuts_only:
             sql += " AND shortcut IS NOT NULL AND shortcut != ''"
         return sql, tuple(params)
-
-    _MEMO_COLUMNS = "id, uid, idx, content, tags, shortcut, created_at, modified_at, source, title"
 
     def get_memos(
         self,
@@ -243,14 +179,11 @@ class MemoDatabase:
         sort_by="idx",
         desc=False,
     ) -> list[MemoRow]:
-        """Return filtered, ordered memos. ``limit=None`` returns every match
-        (formerly ``get_memos_all``); a non-None ``limit`` paginates via
-        ``LIMIT/OFFSET``."""
         order_column = sort_by if sort_by in VALID_SORT_COLUMNS else "idx"
         order_direction = "DESC" if desc else "ASC"
         where_sql, params = self._filters(query, tag, exclude_tag, shortcuts_only)
         sql = (
-            f"SELECT {self._MEMO_COLUMNS} FROM memos"
+            f"SELECT {_MEMO_COLUMNS} FROM memos"
             f"{where_sql} ORDER BY {order_column} {order_direction}, id ASC"
         )
         if limit is not None:
@@ -268,14 +201,14 @@ class MemoDatabase:
     def get_latest_entry(self) -> MemoRow | None:
         with self.connection() as conn:
             row = conn.execute(
-                f"SELECT {self._MEMO_COLUMNS} FROM memos ORDER BY created_at DESC, id DESC LIMIT 1"
+                f"SELECT {_MEMO_COLUMNS} FROM memos ORDER BY created_at DESC, id DESC LIMIT 1"
             ).fetchone()
         return MemoRow.from_row(row)
 
     def get_memo_by_idx(self, idx: int) -> MemoRow | None:
         with self.connection() as conn:
             row = conn.execute(
-                f"SELECT {self._MEMO_COLUMNS} FROM memos WHERE idx = ?",
+                f"SELECT {_MEMO_COLUMNS} FROM memos WHERE idx = ? ORDER BY id ASC",
                 (idx,),
             ).fetchone()
         return MemoRow.from_row(row)
@@ -283,7 +216,7 @@ class MemoDatabase:
     def get_memo_by_shortcut(self, shortcut: str) -> MemoRow | None:
         with self.connection() as conn:
             row = conn.execute(
-                f"SELECT {self._MEMO_COLUMNS} FROM memos WHERE shortcut = ?",
+                f"SELECT {_MEMO_COLUMNS} FROM memos WHERE shortcut = ?",
                 (shortcut,),
             ).fetchone()
         return MemoRow.from_row(row)
@@ -291,96 +224,130 @@ class MemoDatabase:
     def get_memo_by_uid(self, uid: str) -> MemoRow | None:
         with self.connection() as conn:
             row = conn.execute(
-                f"SELECT {self._MEMO_COLUMNS} FROM memos WHERE uid = ?",
+                f"SELECT {_MEMO_COLUMNS} FROM memos WHERE uid = ?",
                 (uid,),
             ).fetchone()
         return MemoRow.from_row(row)
 
     @staticmethod
     def _uid_prefix_like(prefix: str) -> str:
-        """Build a LIKE pattern matching uids that start with ``prefix``,
-        escaping LIKE wildcards so a literal prefix is matched."""
         escaped = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         return escaped + "%"
 
     def get_memo_by_uid_prefix(self, prefix: str) -> MemoRow | None:
-        """Resolve a memo by a uid prefix (e.g. a legacy 7-char uid against
-        widened 16-char uids). Returns the single match, or None when there is
-        no match or the prefix is ambiguous."""
         if not prefix:
             return None
         pattern = self._uid_prefix_like(prefix)
         with self.connection() as conn:
             rows = conn.execute(
-                f"SELECT {self._MEMO_COLUMNS} FROM memos WHERE uid LIKE ? ESCAPE '\\' LIMIT 2",
+                f"SELECT {_MEMO_COLUMNS} FROM memos WHERE uid LIKE ? ESCAPE '\\' LIMIT 2",
                 (pattern,),
             ).fetchall()
         if len(rows) != 1:
             return None
         return MemoRow.from_row(rows[0])
 
-    def add_memo(
+    def path_for(self, uid: str) -> str | None:
+        """Return the cached relative ``.md`` path for ``uid`` (or None)."""
+        with self.connection() as conn:
+            row = conn.execute("SELECT path FROM memos WHERE uid = ?", (uid,)).fetchone()
+        return row[0] if row else None
+
+    def shortcut_owner(self, shortcut: str, exclude_uid: str | None = None) -> str | None:
+        """Return the uid that currently holds ``shortcut`` (excluding
+        ``exclude_uid``), or None if free."""
+        if not shortcut:
+            return None
+        with self.connection() as conn:
+            rows = conn.execute("SELECT uid FROM memos WHERE shortcut = ?", (shortcut,)).fetchall()
+        for (uid,) in rows:
+            if uid != exclude_uid:
+                return uid
+        return None
+
+    # ------------------------------------------------------------------ #
+    # Cache mutation / manifest (used by reconcile)
+    # ------------------------------------------------------------------ #
+    def manifest(self) -> dict[str, dict]:
+        """Return ``{uid: {id, path, mtime, body_hash, blessed_hash, source}}``
+        for every cached entry — the reconcile baseline."""
+        with self.connection() as conn:
+            rows = conn.execute(
+                "SELECT uid, id, path, mtime, body_hash, blessed_hash, source FROM memos"
+            ).fetchall()
+        return {
+            uid: {
+                "id": rid,
+                "path": path,
+                "mtime": mtime,
+                "body_hash": body_hash,
+                "blessed_hash": blessed_hash,
+                "source": source,
+            }
+            for uid, rid, path, mtime, body_hash, blessed_hash, source in rows
+        }
+
+    def upsert(
         self,
+        *,
         uid: str,
         idx: int,
-        shortcut: str | None,
         content: str,
         tags: str,
+        shortcut: str | None,
         created_at: str,
         modified_at: str,
-        title: str | None = None,
+        source: str,
+        title: str | None,
+        description: str | None,
+        path: str,
+        mtime: float,
+        body_hash: str,
+        blessed_hash: str | None,
     ) -> None:
+        """Insert or update the cache row for ``uid`` (keyed by uid)."""
         with self.connection() as conn:
             conn.execute(
-                "INSERT INTO memos "
-                "(uid, idx, shortcut, content, tags, created_at, modified_at, title) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (uid, idx, shortcut or None, content, tags, created_at, modified_at, title),
+                """
+                INSERT INTO memos
+                    (uid, idx, content, tags, shortcut, created_at, modified_at,
+                     source, title, description, path, mtime, body_hash, blessed_hash)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(uid) DO UPDATE SET
+                    idx=excluded.idx, content=excluded.content, tags=excluded.tags,
+                    shortcut=excluded.shortcut, created_at=excluded.created_at,
+                    modified_at=excluded.modified_at, source=excluded.source,
+                    title=excluded.title, description=excluded.description,
+                    path=excluded.path, mtime=excluded.mtime,
+                    body_hash=excluded.body_hash, blessed_hash=excluded.blessed_hash
+                """,
+                (
+                    uid,
+                    idx,
+                    content,
+                    tags,
+                    shortcut or None,
+                    created_at,
+                    modified_at,
+                    source,
+                    title,
+                    description,
+                    path,
+                    mtime,
+                    body_hash,
+                    blessed_hash,
+                ),
             )
 
-    def add_memo_auto_idx(
-        self,
-        uid: str,
-        shortcut: str | None,
-        content: str,
-        tags: str,
-        created_at: str,
-        modified_at: str,
-        title: str | None = None,
-    ) -> int:
-        """Insert a memo at the next free display index, allocated atomically in
-        the same transaction, and return that idx. Raises ``IntegrityErrors`` on
-        a shortcut clash so callers can report it. Centralizes the INSERT that
-        ``add`` and ``copy`` previously inlined."""
+    def update_location(self, uid: str, path: str, mtime: float) -> None:
+        """Record a new path/mtime for ``uid`` (a rename detected by reconcile)."""
         with self.connection() as conn:
-            new_idx = self.next_idx(conn)
-            conn.execute(
-                "INSERT INTO memos "
-                "(uid, idx, shortcut, content, tags, created_at, modified_at, title) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (uid, new_idx, shortcut or None, content, tags, created_at, modified_at, title),
-            )
-        return new_idx
+            conn.execute("UPDATE memos SET path = ?, mtime = ? WHERE uid = ?", (path, mtime, uid))
 
-    def update_memo(
-        self,
-        memo_id: int,
-        content: str,
-        tags: str,
-        shortcut: str | None,
-        created_at: str,
-        modified_at: str,
-        title: str | None = None,
-    ) -> None:
+    def delete_by_uid(self, uid: str) -> None:
         with self.connection() as conn:
-            # Editing an entry counts as reviewing it: reset source to 'local'
-            # so a previously remote-synced entry no longer warns on exec.
-            conn.execute(
-                "UPDATE memos SET content = ?, tags = ?, shortcut = ?, "
-                "created_at = ?, modified_at = ?, title = ?, source = 'local' WHERE id = ?",
-                (content.strip(), tags, shortcut or None, created_at, modified_at, title, memo_id),
-            )
+            conn.execute("DELETE FROM memos WHERE uid = ?", (uid,))
 
-    def delete_memo(self, memo_id: int) -> None:
+    def delete_by_path(self, path: str) -> None:
         with self.connection() as conn:
-            conn.execute("DELETE FROM memos WHERE id = ?", (memo_id,))
+            conn.execute("DELETE FROM memos WHERE path = ?", (path,))

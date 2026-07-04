@@ -264,6 +264,12 @@ koda r pybase >> Dockerfile
 
 ## Cross-machine
 
+The vault (`~/.koda-cli`) is itself a git repository, so `koda push` commits and
+pushes your `entries/*.md` and `koda pull` pulls and reconciles them. The
+examples below assume you have added a remote once — see
+[Git sync](README.md#git-sync-multi-machine-sharing-via-github) for setup
+(`git -C ~/.koda-cli remote add origin <url>`, then `koda push`).
+
 **Share your public SSH key across machines**
 
 Save the key on machine A, push it, then pull and retrieve it on any other machine.

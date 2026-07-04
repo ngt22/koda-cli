@@ -21,8 +21,9 @@ from rich.console import Console
 
 from .cli_utils import ExitCode, exit_error
 from .cmd_helpers.parsing import parse_var_items
-from .config import Config, ConfigManager, ValidationError, db_path_allowed
+from .config import Config, ConfigManager, ValidationError, vault_path_allowed
 from .db import DatabaseError, MemoDatabase
+from .reconcile import reconcile_all
 
 __app_name__ = "koda"
 __version__ = version("koda-cli")
@@ -67,31 +68,40 @@ def get_config_sources() -> dict[str, str]:
     return _config_sources
 
 
+def get_vault() -> Path:
+    """Return the vault directory (holds ``entries/`` and the ``.koda`` cache).
+
+    vault.path from a config file or KODA_VAULT_PATH env bypasses validate(), so
+    re-check here before koda creates files at an attacker-chosen location."""
+    cfg = get_config()
+    if not vault_path_allowed(cfg.vault_path):
+        exit_error(
+            f"Refusing to use vault.path {cfg.vault_path!r}: must be a directory under "
+            "$HOME. Set KODA_DB_PATH_OVERRIDE=1 to allow another location."
+        )
+    return Path(cfg.vault_path).expanduser()
+
+
+def get_entries_dir() -> Path:
+    """Return ``<vault>/entries`` — the source-of-truth ``.md`` directory."""
+    return get_vault() / "entries"
+
+
+def _cache_path() -> Path:
+    """Return ``<vault>/.koda/cache.db`` — the disposable derived cache."""
+    return get_vault() / ".koda" / "cache.db"
+
+
 def _resolve_db() -> MemoDatabase:
-    """Return the MemoDatabase handle, constructing it lazily on first use."""
+    """Return the MemoDatabase (cache) handle, constructing it lazily."""
     global _db
     if _db is None:
-        cfg = get_config()
-        # db.path from a config file or KODA_DB_PATH env bypasses validate(),
-        # so re-check here before init_db can mkdir/create a file at an
-        # attacker-chosen location (e.g. ~/.ssh/authorized_keys).
-        if cfg.db_backend == "local" and not db_path_allowed(cfg.db_path):
-            exit_error(
-                f"Refusing to use db.path {cfg.db_path!r}: outside the koda data dir "
-                "(~/.local/share/koda or $XDG_DATA_HOME/koda). "
-                "Set KODA_DB_PATH_OVERRIDE=1 to allow another location."
-            )
-        _db = MemoDatabase(
-            backend=cfg.db_backend,
-            path=Path(cfg.db_path).expanduser(),
-            turso_url=cfg.turso_url,
-            turso_token=cfg.turso_token,
-        )
+        _db = MemoDatabase(path=_cache_path())
     return _db
 
 
 def get_db() -> MemoDatabase:
-    """Return the lazily constructed MemoDatabase handle."""
+    """Return the lazily constructed MemoDatabase (cache) handle."""
     return _resolve_db()
 
 
@@ -128,8 +138,16 @@ def launch_editor(path: str) -> None:
 
 
 def init_db():
+    """Ensure the cache exists and reflects the current ``.md`` files.
+
+    Runs on every command: the cache is brought up to schema, then reconciled
+    against ``entries/`` (mtime-gated, so the steady state is just ``stat``
+    calls) so external add/edit/delete/rename by Obsidian, an editor, an AI
+    agent, or ``git pull`` are picked up before the command reads anything."""
     try:
-        get_db().init_db()
+        db = get_db()
+        db.init_db()
+        reconcile_all(db, get_entries_dir())
     except typer.Exit:
         raise
     except DatabaseError as e:

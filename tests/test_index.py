@@ -1,10 +1,9 @@
 """Display-index ops: swap temp-sentinel safety, move/swap edge cases."""
 
 import pytest
+from _helpers import put_entry
 
-import koda.runtime as runtime
 from koda.commands import index
-from koda.constants import TAG_SEPARATOR
 
 
 class FakeStdin:
@@ -17,21 +16,12 @@ class FakeStdin:
 
 @pytest.fixture
 def wired_db(db, monkeypatch):
-    monkeypatch.setattr(runtime, "_db", db)
     monkeypatch.setattr("sys.stdin", FakeStdin())
     return db
 
 
 def _seed(db, idx, content=None):
-    db.add_memo(
-        uid=f"uid{idx:+05d}",
-        idx=idx,
-        shortcut=None,
-        content=content or f"e{idx}",
-        tags=TAG_SEPARATOR.join(()),
-        created_at="2026-01-01 00:00:00",
-        modified_at="2026-01-01 00:00:00",
-    )
+    put_entry(content or f"e{idx}", idx=idx, uid=f"uid{idx:+06d}0000")
 
 
 def test_swap_two_entries(wired_db):
