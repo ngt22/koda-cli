@@ -206,34 +206,10 @@ def _strip_inline_comment(line: str) -> str:
     return line
 
 
-def _strip_raw_inline_comments(content: str) -> str:
-    lines = content.splitlines(keepends=True)
-    if not lines:
-        return content
-
-    stripped_lines = []
-    for line in lines:
-        newline = ""
-        body = line
-        if line.endswith("\r\n"):
-            newline = "\r\n"
-            body = line[:-2]
-        elif line.endswith("\n") or line.endswith("\r"):
-            newline = line[-1]
-            body = line[:-1]
-        stripped_lines.append(_strip_inline_comment(body) + newline)
-    return "".join(stripped_lines)
-
-
 def emit_raw(ref: str | None, vars: list[str] | None = None) -> None:
     init_db()
     row = resolve_ref(ref)
     content = _apply_vars(row.content if row.content is not None else "", vars)
-    content = _strip_raw_inline_comments(content)
-    # POSIX text files end in a newline; append one when the body is non-empty
-    # and not already newline-terminated so `koda raw | wc -l` and friends work.
-    if content and not content.endswith("\n"):
-        content += "\n"
     sys.stdout.write(content)
 
 

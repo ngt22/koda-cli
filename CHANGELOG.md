@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- `koda raw` now prints the stored body byte-for-byte. The previous automatic
+  transforms — stripping shell-style inline comments and appending a trailing
+  newline when missing — are removed. **Breaking:** consumers that relied on
+  the old shell-safe output must handle comments and newlines themselves.
+
 ## [1.4.0] - 2026-06-13
 
 ### Added
