@@ -1,7 +1,7 @@
 # koda-cli
 
 [![CI](https://github.com/ngt22/koda-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/ngt22/koda-cli/actions/workflows/ci.yml)
-[![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue)](https://github.com/ngt22/koda-cli/blob/main/pyproject.toml)
+[![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue)](https://github.com/ngt22/koda-cli/blob/main/pyproject.toml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](https://github.com/ngt22/koda-cli/blob/main/LICENSE)
 
 A **text store** for the terminal. Save any text — commands, paths, templates, notes — to SQLite and recall it instantly by index, shortcut, or fuzzy search. Saved entries can be executed as shell commands, making koda a **terminal launcher**. Sync via a private Git repository to share the same store across machines, giving you a **cross-machine clipboard** that works from any terminal. Built with Python, Typer, and Rich.
@@ -14,8 +14,8 @@ A **text store** for the terminal. Save any text — commands, paths, templates,
 - [Quick reference](#quick-reference)
 - [Installation](#installation)
 - [Update](#update)
+- [Uninstall](#uninstall)
 - [Command reference](#command-reference)
-- [Options](#options)
 - [Recommended aliases](#recommended-aliases)
 - [Configuration](#configuration)
 - [Environment variables](#environment-variables)
@@ -38,16 +38,16 @@ koda sits between a snippet manager and a note tool: it keeps arbitrary text the
 
 **What koda gives you, at a glance:**
 
-| Capability | koda |
-|---|:---|
-| Store arbitrary text | ✓ |
-| Run any entry as a command | ✓ (`exec` / `pick`) |
-| Fuzzy interactive pick | ✓ (fzf) |
-| Variable substitution | ✓ (`${KEY}` / `$1`) |
-| Shortcut & index recall | ✓ |
-| Cross-machine sync | ✓ (your own Git repo) |
-| Storage | SQLite (or Turso) |
-| Shell-friendly output | ✓ (`raw`, `--json`) |
+| Capability | How (koda) |
+|---|---|
+| Store arbitrary text | `add` — arguments, stdin, or `$EDITOR` |
+| Run any entry as a command | `exec` / `pick -x` |
+| Fuzzy interactive pick | `pick` (fzf) |
+| Variable substitution | `-V` — `${KEY}` / `$1` |
+| Shortcut & index recall | numeric `idx` or `-s` shortcut |
+| Cross-machine sync | `push` / `pull` via your own Git repo |
+| Storage | local SQLite (or Turso remote) |
+| Shell-friendly output | `raw`, `--json` |
 
 ## Features
 
@@ -68,7 +68,8 @@ koda sits between a snippet manager and a note tool: it keeps arbitrary text the
 **Other**
 
 - **Cross-machine sync**: Push and pull via a private Git repository — the same store is available from every terminal, on every machine.
-- **Display index**: Stable `uid` (SHA1 short hash) plus user-controlled `idx`. Reorder with `move`/`swap`; close gaps with `compact`.
+- **Display index**: Stable `uid` (first 16 hex chars of SHA1 over content + creation timestamp) plus user-controlled `idx`. Reorder with `move`/`swap`; close gaps with `compact`.
+- **uid collision caveat**: The `uid` is derived from content + creation time (second granularity), so two entries created in the same second with identical content share a `uid` and merge into one entry during Git sync. Avoid creating identical entries within the same second if you rely on sync.
 - **XDG-friendly**: Data under `~/.local/share/koda/`, config under `~/.config/koda/`.
 - **Configurable defaults**: Persist preferences in `~/.config/koda/config.toml`.
 
@@ -183,6 +184,20 @@ uv tool upgrade koda-cli
 pipx upgrade koda-cli
 ```
 
+---
+
+## Uninstall
+
+```bash
+# uv
+uv tool uninstall koda-cli
+
+# pipx
+pipx uninstall koda-cli
+```
+
+Data (`~/.local/share/koda/`) and config (`~/.config/koda/`) are not removed by the tool manager. Delete them manually if you want a full cleanup.
+
 ## Command reference
 
 Most commands take an **entry reference** as their first argument — either a **numeric index** (e.g. `5`, shown by `koda l`) or a **shortcut** (a string alias you assign with `-s` at save time, e.g. `koda a "..." -s glog`). In the examples below, names like `glog` and `web-srv` are shortcuts.
@@ -221,6 +236,32 @@ Content source precedence: **text arguments > piped stdin > `$EDITOR`**. When
 arguments are given, piped stdin is ignored (with a warning on stderr). This
 keeps `koda a "text"` working in non-interactive shells (cron, IDE tasks,
 sandboxes) where stdin is not a TTY.
+
+---
+
+### Shortcuts (`-s` / `--shortcut`)
+
+Assign a memorable string alias to any entry and use it instead of a numeric index.
+
+```bash
+# Save with a shortcut (-s is short for --shortcut)
+koda a "kubectl rollout restart deploy/api" -t k8s -s restart
+
+# Use the shortcut anywhere an index is accepted
+koda r restart
+koda x restart
+koda s restart
+koda d restart
+
+# Default command — no subcommand needed (when defaults.cmd = raw)
+koda restart          # → koda raw restart
+
+# List all entries that have shortcuts
+koda l -S
+koda l -S --sort-by shortcut
+```
+
+To change or remove a shortcut, open the entry with `edit` — the `shortcut:` field appears in the metadata footer.
 
 ---
 
@@ -272,12 +313,12 @@ curl http://$(koda r web-ip):3000/healthz
 koda e web-ip   # opens $EDITOR
 ```
 
-`raw` strips shell-style inline comments (`#` at line start or after whitespace). Use `show` to see the original stored text.
+`raw` prints the body exactly as stored, byte-for-byte — comments, whitespace, and trailing newlines are preserved. Use `show` to see the entry with its metadata.
 
 ```bash
 koda a 'echo hello  # this is a comment'
-koda r 5    # → echo hello
-koda s 5    # → echo hello  # this is a comment
+koda r 5    # → echo hello  # this is a comment
+koda s 5    # → echo hello  # this is a comment (with metadata)
 ```
 
 ---
@@ -417,19 +458,60 @@ koda a "docker compose logs -f" -s dcl
 
 koda a -s restart        # opens $EDITOR; paste:
 #   @dcd
-#   @dcup        # comments and blank lines are ignored
+#   @dcu         # comments and blank lines are ignored
 #   @dcl -f
-koda x restart           # runs dcd, then dcup, then `dcl -f`, in order
+koda x restart           # runs dcd, then dcu, then `dcl -f`, in order
 ```
 
 - **Per-line args.** Text after a ref on a line is passed to that child, with the same rules as call-time args: it fills `$1`/`"$@"` if the child body references them, otherwise it's appended (`@dcl -f` → `docker compose logs -f`).
 - **Nesting.** A child that is itself a group expands recursively. Cycles (`@a` → `@b` → `@a`) are detected and rejected, and nesting is capped at 10 levels deep.
-- **Parameterize with `-V`.** `-V` substitutes into the group body *before* it's parsed, so `@${SVC}` resolves to a different child per call (`koda x grp -V SVC=web`). Trailing args directly after a group ref are not supported in v1 — use `-V`.
-- **Fail fast.** The whole plan is resolved before anything runs, so an unknown ref aborts with nothing executed. The first child to exit non-zero stops the group, and `koda x` exits with that child's code. Progress lines (`→ [3] dcl (2/5)`) go to stderr, keeping stdout clean for the children's own output.
+- **Parameterize with `-V`.** `-V` substitutes into the group body *before* it's parsed, so `@${SVC}` resolves to a different child per call (`koda x grp -V SVC=web`). Trailing args directly after a group ref are not supported yet — use `-V`.
+- **Fail fast.** The whole plan is resolved before anything runs, so an unknown ref aborts with nothing executed. The first child to exit non-zero stops the group, and `koda x` exits with that child's code. Progress lines (`→ [2] dcl (3/3)`) go to stderr, keeping stdout clean for the children's own output.
 - **Remote confirmation.** If the group itself or any expanded child is `source=remote`, `koda x` prompts once before running the whole group (listing the remote entries); `-f` skips it and `exec.confirm_remote=false` disables it, same as a single entry.
 - **Preview with `-n`.** `koda x <group> -n` prints one resolved command per child, in execution order, without running anything.
 
 > **Security**: only store trusted commands. `exec` runs the body through the configured shell (`sh` by default). A group runs each referenced entry, so the same caution applies to every child it pulls in.
+
+---
+
+### Variable substitution (`-V` / `--var`)
+
+Embed placeholders in a saved entry; fill them in at recall time with `-V`.
+
+| Style | Placeholder | How to pass |
+|---|---|---|
+| Named | `${host}` | `-V KEY=VALUE` |
+| Positional | `$1`, `$2`, ... | `-V value` or `-V val1,val2` (comma-separated, left-to-right) |
+
+```bash
+# Save a template with a positional placeholder
+koda a "gcloud storage cp \$1 gs://my-company-analytics-prod/uploads/" -t gcloud -s upload
+
+# Run with different values — no need to retype the bucket path
+koda x upload -V ./report.csv
+koda x upload -V ./summary.csv
+
+# Named substitution — swap one variable by name
+koda a "aws s3 sync ./dist s3://acme-frontend-\${env}-us-east-1/app/" -t aws -s deploy
+koda x deploy -V env=prod
+koda x deploy -V env=staging
+
+# Multiple positional values
+koda a "rsync -avz \$1 \$2" -t rsync
+koda r 8 -V /src/path -V user@host:/dest
+koda r 8 -V '/src/path,user@host:/dest'    # same result, comma-separated
+
+# Mix named and positional
+koda r 9 -V 'admin,5432' -V host=db.example.com -V name="new york"
+# → connect admin@db.example.com:5432 as new york
+```
+
+Positional values are comma-separated within a single `-V` flag. Use `"..."` inside the flag to include spaces or commas in a value: `-V '"hello world","foo,bar"'`.
+
+Values follow CSV quoting rules: `"..."` preserves spaces and commas, a literal
+double quote inside a value is written as `""` (doubled), and backslashes are
+literal characters, not escapes. Example: `-V '"say ""hi""","a\b"'` passes the
+values `say "hi"` and `a\b`.
 
 ---
 
@@ -473,8 +555,6 @@ koda p -x -q docker -t dev     # pre-filter by query and tag, then pick
 koda x "$(koda p -p)"          # pick IDX, pass to exec
 kd x "$(kd p -p)"              # kd prefix
 kx "$(kp -p)"                  # two-letter alias
-
-eval $(koda p -p | xargs koda r)   # pick IDX, eval the body
 ```
 
 Other action flags: `-e` edit, `-r` raw, `-s` show.
@@ -533,6 +613,22 @@ Re-tagging with an already-present tag is idempotent (no-op).
 
 ---
 
+### Tags (`-t` / `--tag`)
+
+Assign one or more tags to an entry at save time; use them to filter across commands.
+
+```bash
+koda a "docker compose up" -t docker,dev     # assign multiple tags at add time
+koda l -t docker                             # filter list by tag substring
+koda l -T archive                            # exclude entries tagged "archive"
+koda d -t tmp                                # delete all entries tagged "tmp"
+koda p -x -t dev                             # pick + exec, pre-filtered by tag
+```
+
+Use `tag` (subcommand) to add or remove tags on existing entries in bulk — see [Tag](#tag).
+
+---
+
 ### Reorder entries (`move`, `swap`, `shift`, `compact`)
 
 Each entry has a display index (`IDX`) you can freely rearrange — useful for keeping frequently used snippets at low numbers.
@@ -561,90 +657,6 @@ koda g reset -f                  # delete config file without prompt
 koda g edit                      # open config in $EDITOR
 koda g path                      # print config file path
 ```
-
----
-
-## Options
-
-The following are flags that work across multiple commands, not standalone subcommands.
-
----
-
-### Shortcuts (`-s` / `--shortcut`)
-
-Assign a memorable string alias to any entry and use it instead of a numeric index.
-
-```bash
-# Save with a shortcut (-s is short for --shortcut)
-koda a "kubectl rollout restart deploy/api" -t k8s -s restart
-
-# Use the shortcut anywhere an index is accepted
-koda r restart
-koda x restart
-koda s restart
-koda d restart
-
-# Default command — no subcommand needed (when defaults.cmd = raw)
-koda restart          # → koda raw restart
-
-# List all entries that have shortcuts
-koda l -S
-koda l -S --sort-by shortcut
-```
-
-To change or remove a shortcut, open the entry with `edit` — the `shortcut:` field appears in the metadata footer.
-
----
-
-### Tags (`-t` / `--tag`)
-
-Assign one or more tags to an entry at save time; use them to filter across commands.
-
-```bash
-koda a "docker compose up" -t docker,dev     # assign multiple tags at add time
-koda l -t docker                             # filter list by tag substring
-koda l -T archive                            # exclude entries tagged "archive"
-koda d -t tmp                                # delete all entries tagged "tmp"
-koda p -x -t dev                             # pick + exec, pre-filtered by tag
-```
-
-Use `tag` (subcommand) to add or remove tags on existing entries in bulk — see [Tag](#tag).
-
----
-
-### Variable substitution (`-V` / `--var`)
-
-Embed placeholders in a saved entry; fill them in at recall time with `-V`.
-
-| Style | Placeholder | How to pass |
-|---|---|---|
-| Named | `${host}` | `-V KEY=VALUE` |
-| Positional | `$1`, `$2`, ... | `-V value` or `-V val1,val2` (comma-separated, left-to-right) |
-
-```bash
-# Save a template with a positional placeholder
-koda a "gcloud storage cp \$1 gs://my-company-analytics-prod/uploads/" -t gcloud -s upload
-
-# Run with different values — no need to retype the bucket path
-koda x upload -V ./report.csv
-koda x upload -V ./summary.csv
-
-# Named substitution — swap one variable by name
-koda a "aws s3 sync ./dist s3://acme-frontend-\${env}-us-east-1/app/" -t aws -s deploy
-koda x deploy -V env=prod
-koda x deploy -V env=staging
-
-# Multiple positional values
-koda a "rsync -avz \$1 \$2" -t rsync
-koda r 8 -V /src/path -V user@host:/dest
-koda r 8 -V '/src/path,user@host:/dest'    # same result, comma-separated
-
-# Mix named and positional
-koda r 9 -V 'admin,5432' -V host=db.example.com -V name="new york"
-# → connect admin@db.example.com:5432 as new york
-```
-
-Positional values are comma-separated within a single `-V` flag. Use `"..."` inside the flag to include spaces or commas in a value: `-V '"hello world","foo,bar"'`.
 
 ---
 
@@ -746,13 +758,14 @@ shell = "sh"      # shell used by exec — restricted to: sh, bash, zsh, fish
 
 Priority order: **CLI flags > environment variables > config file > built-in defaults**
 
-> **Security**: `exec.shell` is restricted to an allowlist (`sh`, `bash`, `zsh`, `fish`) that must resolve to an installed executable. This prevents a tampered config from redirecting `koda x` to an arbitrary binary. The config file (`config.toml`) and database are created with `0600` permissions and their parent directories with `0700`, so a plaintext Turso token is not world-readable.
+> **Security**: `exec.shell` is restricted to an allowlist (`sh`, `bash`, `zsh`, `fish`) that must resolve to an installed executable. This prevents a misconfigured or tampered config from accidentally redirecting `koda x` to an unexpected binary. The config file (`config.toml`) and database are created with `0600` permissions and their parent directories with `0700`, so a plaintext Turso token is not world-readable.
 
 ## Environment variables
 
 | Variable | Purpose |
 |---|---|
 | `KODA_DB_PATH` | Override database file path |
+| `KODA_DB_PATH_OVERRIDE` | Set to `1` to allow `KODA_DB_PATH` to point outside `~/.local/share/koda` — the explicit escape hatch for CI/tests |
 | `KODA_DEFAULT_CMD` | Override `defaults.cmd` for this session |
 | `KODA_CONFIG_PATH` | Override config file path |
 | `KODA_TURSO_URL`        | Turso database URL (overrides `turso.url` in config) |
@@ -762,6 +775,9 @@ Priority order: **CLI flags > environment variables > config file > built-in def
 | `KODA_GIT_SYNC_FORMAT`  | Sync wire format — `jsonl` (overrides `git.sync_format`) |
 | `KODA_FZF_OPTS`         | Extra flags passed to `fzf` by `pick` (e.g. `--height 40% --layout reverse`) |
 | `EDITOR`                | Editor for `add`, `edit`, and `config edit` (default: `vim`) |
+
+Example: `KODA_DB_PATH=/tmp/ci.db KODA_DB_PATH_OVERRIDE=1 koda l` runs against a
+temporary database outside the data directory.
 
 ## Turso (remote database)
 
@@ -815,6 +831,13 @@ The local SQLite database (`db.path`) and the Turso database are independent —
 
 Koda supports syncing entries across machines using a Git repository (e.g. a private GitHub repo) as a transport. On push, Koda exports the local database as a JSON Lines file (`koda-sync.jsonl`) into a local clone, commits it, and pushes to the remote. On pull, it fetches the latest commit and merges entries into the local database by `uid` and `modified_at` — newer wins, no entry is deleted.
 
+> **Deletions are not synced.** `pull` never deletes entries — removing an
+> entry on one machine does not remove it anywhere else. After a `pull`, a
+> deleted entry can come back (along with any newer synced version of its
+> body). To delete an entry everywhere, remove it on **each** machine. This is
+> a deliberate safe-merge choice: sync never loses data, at the cost of
+> deletions not propagating.
+
 This works independently of the Turso backend. You can use Git sync with the default local SQLite database.
 
 > **Security note**: `koda-sync.jsonl` contains **all entries in plaintext**.
@@ -855,6 +878,13 @@ koda pull   # git pull the clone, merge koda-sync.jsonl into local DB
 ```
 
 `push` does a `git pull --rebase` before writing the payload so the branch stays linear. `pull` merges by `uid` — entries that already exist locally are updated only if the incoming `modified_at` is newer.
+
+The sync payload is uid-sorted, so concurrent edits to *different* entries
+usually merge cleanly at the Git level. If the **same** entry is edited on two
+machines before either pushes, `git pull --rebase` hits a conflict and
+`koda push`/`koda pull` fails with "Resolve conflicts there, then retry".
+Resolution is manual: edit `koda-sync.jsonl` inside the sync clone to keep the
+desired line(s), commit, and re-run the command.
 
 ### Remote trust boundary
 
@@ -981,7 +1011,7 @@ sync remote, the `KODA_*` environment variables, a hand-edited
 
 | Area | Risk | Mitigation |
 |---|---|---|
-| `exec` shell | A tampered `exec.shell` could redirect `koda x` to an arbitrary binary | `exec.shell` is restricted to an allowlist (`sh`, `bash`, `zsh`, `fish`) that must resolve to an absolute executable |
+| `exec` shell | A misconfigured or tampered `exec.shell` could redirect `koda x` to an unexpected binary | `exec.shell` is restricted to an allowlist (`sh`, `bash`, `zsh`, `fish`) that must resolve to an installed executable |
 | Git sync poisoning | A writable remote could rewrite the body of an `exec` entry | `pull`-merged entries are marked `source=remote` and **`koda x` prompts before running them** (review with `koda edit` to trust; `exec.confirm_remote=false` opts out, at the cost of the check); `pull --dry-run` previews changes; the `source` flag is local-only and never synced. See [Remote trust boundary](#remote-trust-boundary) |
 | uid collision | The old 7-char (28-bit) `uid` was collidable (~16k entries) / preimage-attackable, enabling sync poisoning | `uid` is 16 hex chars (64-bit); legacy short uids still resolve via prefix match |
 | `git.payload_file` | A relative path like `.git/hooks/post-merge` could overwrite a git hook that then executes | The validator and `push` reject any path with `..` or a `.git` component, or an absolute path |
