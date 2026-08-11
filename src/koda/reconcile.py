@@ -60,6 +60,7 @@ def _upsert(
 ) -> None:
     """Upsert one entry into the cache, dropping a shortcut already owned by a
     different uid (mirrors the old merge's shortcut-conflict handling)."""
+    assert entry.uid is not None  # callers normalize the entry before upserting
     shortcut = entry.shortcut
     if shortcut and db.shortcut_owner(shortcut, exclude_uid=entry.uid):
         shortcut = None
@@ -112,6 +113,7 @@ def reconcile_all(db: MemoDatabase, entries_dir: Path, *, force: bool = False) -
         if _normalize(entry, entries_dir, path, now, next_idx):
             write_entry(entries_dir, entry, path=path)
             mtime = path.stat().st_mtime
+        assert entry.uid is not None  # _normalize always assigns one
         if entry.idx is not None and entry.idx >= next_idx:
             next_idx = entry.idx + 1
 
@@ -132,7 +134,9 @@ def sync_path(db: MemoDatabase, entries_dir: Path, path: Path, *, blessed: bool)
     entry = read_entry(path)
     if _normalize(entry, entries_dir, path, now, db.allocate_idx()):
         write_entry(entries_dir, entry, path=path)
+    assert entry.uid is not None  # _normalize always assigns one
     mtime = path.stat().st_mtime
+    blessed_hash: str | None
     if blessed:
         source, blessed_hash = "local", entry.body_hash
     else:

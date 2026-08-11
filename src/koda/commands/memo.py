@@ -147,6 +147,7 @@ def _add_impl(
 
     entry = _write_new_entry(content, formatted_tags, shortcut, title, description)
     uid, new_idx = entry.uid, entry.idx
+    assert uid is not None  # _write_new_entry always assigns one
 
     if print_uid:
         sys.stdout.write(uid + "\n")
