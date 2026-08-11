@@ -30,7 +30,7 @@ def test_external_new_file_gets_uid_and_idx_written_back(db):
     assert parsed.idx is not None
     row = db.get_memo_by_uid(parsed.uid)
     assert row is not None
-    assert row.content == "echo hello"
+    assert row.content == "echo hello\n"
     # A never-seen file is untrusted until reviewed.
     assert row.source == "remote"
 

@@ -20,8 +20,8 @@ Format::
     <content, stored verbatim>
 
 Rules:
-- The **body is the content, stored raw** (only surrounding whitespace is
-  stripped, matching koda's long-standing ``content.strip()`` behaviour). No
+- The **body is the content, stored byte-exact** (no whitespace stripping, no
+  trailing-newline normalization — matches koda's ``raw`` semantics). No
   fencing, no escaping — ``$1``, ``\\$(...)``, backticks and ``---`` all survive.
 - Frontmatter is the FIRST ``---...---`` block only; ``---`` inside the body is
   safe.
@@ -91,7 +91,7 @@ class MdEntry:
 
     @property
     def body_hash(self) -> str:
-        """sha1 of the (stripped) content — the trust-ledger fingerprint."""
+        """sha1 of the content — the trust-ledger fingerprint."""
         return hashlib.sha1((self.content or "").encode("utf-8")).hexdigest()
 
 
@@ -132,7 +132,7 @@ def _normalize_tags(value) -> str:
 def parse_md(text: str) -> MdEntry:
     """Parse ``.md`` text into an :class:`MdEntry` (frontmatter + raw body)."""
     fm_yaml, body = split_frontmatter(text)
-    entry = MdEntry(content=body.strip())
+    entry = MdEntry(content=body)
     if not fm_yaml:
         return entry
     data = yaml.load(fm_yaml, Loader=_FrontmatterLoader) or {}
@@ -181,11 +181,11 @@ def render_md(entry: MdEntry) -> str:
         if v not in (None, "", []):
             fm[key] = v
 
-    body = (entry.content or "").strip()
+    body = entry.content or ""
     if not fm:
-        return body + "\n" if body else ""
+        return body
     fm_text = yaml.safe_dump(fm, sort_keys=False, allow_unicode=True, default_flow_style=False)
-    return f"---\n{fm_text}---\n{body}\n" if body else f"---\n{fm_text}---\n"
+    return f"---\n{fm_text}---\n{body}"
 
 
 # --------------------------------------------------------------------------- #
