@@ -11,25 +11,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `koda --update` / `koda update` self-update: detects the install method
   (uv tool, pipx, or pip) and runs the matching upgrade command.
 
-## [1.4.0] - 2026-06-13
+## [0.4.0] - 2026-08-10
 
 ### Added
-- `-n` is now the short flag for `--dry-run` on `move`, `shift`, `compact`,
-  `tag`, and `pull`, matching `exec`. Previously only `exec --dry-run` had a
-  `-n` short form.
+- Python 3.13 support: the CI matrix, classifiers, and badge now include 3.13.
 
 ### Changed
-- Single-letter short flags now map to one meaning per letter across commands.
-  `-s` is reserved for `--shortcut` (`add`) and `-n` for `--dry-run` (`exec`).
-  The colliding everyday value flags were renamed: `list --sort-by` `-s` → `-b`,
-  `list --per-page` `-n` → `-l`, and `shift --count` `-n` → `-c`. `pick`'s action
-  flags (`-p`/`-e`/`-x`/`-r`/`-s`/`-m`) mirror subcommand names and are kept.
-  **Breaking:** `koda list -s`, `koda list -n`, and `koda shift -n` no longer
-  work — use `-b`/`-l`/`-c` (long forms `--sort-by`/`--per-page`/`--count` are
-  unchanged). This also fixes the footgun where `koda shift -n` silently shifted
-  entries instead of previewing.
+- `koda raw` now prints the stored body byte-for-byte. The previous automatic
+  transforms — stripping shell-style inline comments and appending a trailing
+  newline when missing — are removed. **Breaking:** consumers that relied on
+  the old shell-safe output must handle comments and newlines themselves.
 
-## [1.3.0] - 2026-06-12
+### Docs
+- README overhaul: fixed example errors (group shortcut, progress line),
+  documented sync deletion/conflict caveats and uid collision, documented CSV
+  escaping for `-V`, merged the standalone Options section into the Command
+  reference, removed the eval example, added Uninstall and
+  `KODA_DB_PATH_OVERRIDE` docs, and clarified the `exec.shell` threat model.
+
+## [0.3.0] - 2026-06-12
 
 ### Added
 - `koda exec <ref> [args…]` now forwards trailing CLI arguments to the command.
@@ -81,7 +81,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sits at display index `-1` (the temporary index is now derived from the table
   rather than a hardcoded `-1` sentinel).
 
-## [1.2.0] - 2026-06-06
+## [0.2.0] - 2026-06-06
 
 ### Added
 - Git sync over JSON Lines: `push` / `pull` commands plus `git.*` configuration,
@@ -112,12 +112,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Restricted `exec.shell` to an allowlisted, absolute-path executable.
 - Hardened on-disk permissions for the config file and database.
 
-## [1.1.1] - 2026-04-24
+## [0.1.1] - 2026-04-24
 
 ### Fixed
 - Convert query parameters to tuples for Turso libsql compatibility.
 
-## [1.1.0] - 2026-04-24
+## [0.1.0] - 2026-04-24
 
 ### Added
 - Turso remote database backend.
@@ -127,18 +127,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Use CSV (comma + quotes) as the positional-variable delimiter and stop
   escaping positional values with `re.escape()`.
 
-## [1.0.2] - 2026-04-22
+## [0.0.2] - 2026-04-22
 
 ### Added
 - Interactive `pick` command backed by fzf.
 
-## [1.0.1] - 2026-04-22
+## [0.0.1] - 2026-04-22
 
 ### Fixed
 - Expand `~` in the database path from config.
 - Use the correct package name for version lookup.
 
-## [1.0.0] - 2026-04-22
+## [0.0.0] - 2026-04-22
 
 ### Added
 - Initial public release: SQLite-backed memo store with `add`, `list`, `show`,
@@ -147,11 +147,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   substitution, and a `config` subcommand.
 
 [Unreleased]: https://github.com/ngt22/koda-cli/compare/v1.4.0...HEAD
-[1.4.0]: https://github.com/ngt22/koda-cli/compare/v1.3.0...v1.4.0
-[1.3.0]: https://github.com/ngt22/koda-cli/compare/v1.2.0...v1.3.0
-[1.2.0]: https://github.com/ngt22/koda-cli/compare/v1.1.1...v1.2.0
-[1.1.1]: https://github.com/ngt22/koda-cli/compare/v1.1.0...v1.1.1
-[1.1.0]: https://github.com/ngt22/koda-cli/compare/v1.0.2...v1.1.0
-[1.0.2]: https://github.com/ngt22/koda-cli/compare/v1.0.1...v1.0.2
-[1.0.1]: https://github.com/ngt22/koda-cli/compare/v1.0.0...v1.0.1
-[1.0.0]: https://github.com/ngt22/koda-cli/releases/tag/v1.0.0
+[0.4.0]: https://github.com/ngt22/koda-cli/compare/v1.3.0...v1.4.0
+[0.3.0]: https://github.com/ngt22/koda-cli/compare/v1.2.0...v1.3.0
+[0.2.0]: https://github.com/ngt22/koda-cli/compare/v1.1.1...v1.2.0
+[0.1.1]: https://github.com/ngt22/koda-cli/compare/v1.1.0...v1.1.1
+[0.1.0]: https://github.com/ngt22/koda-cli/compare/v1.0.2...v1.1.0
+[0.0.2]: https://github.com/ngt22/koda-cli/compare/v1.0.1...v1.0.2
+[0.0.1]: https://github.com/ngt22/koda-cli/compare/v1.0.0...v1.0.1
+[0.0.0]: https://github.com/ngt22/koda-cli/releases/tag/v1.0.0
