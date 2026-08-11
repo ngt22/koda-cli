@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `koda --update` / `koda update` self-update: detects the install method
+  (uv tool, pipx, or pip) and runs the matching upgrade command.
+
 ## [1.4.0] - 2026-06-13
 
 ### Added

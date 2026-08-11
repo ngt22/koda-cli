@@ -15,6 +15,7 @@ from .runtime import (
     get_config,
     init_db,
     resolve_ref,
+    update_callback,
     version_callback,
 )
 
@@ -82,6 +83,13 @@ def main(
         is_eager=True,
         help="Print version and exit.",
     ),
+    update: bool | None = typer.Option(
+        None,
+        "--update",
+        is_eager=True,
+        callback=update_callback,
+        help="Update koda to the latest version and exit.",
+    ),
 ):
     """Default: run the default command (see `koda config get defaults.cmd`)."""
     if ctx.invoked_subcommand is None:
@@ -103,6 +111,7 @@ def main(
 # RESERVED_SHORTCUTS, which the command modules import from here).
 from .commands import exec as _exec  # noqa: E402,F401
 from .commands import git, index, memo  # noqa: E402,F401
+from .commands import update as _update  # noqa: E402,F401
 
 if __name__ == "__main__":
     app()
