@@ -141,6 +141,7 @@ Grouped the same way as `koda --help`.
 | Command | Alias | Description |
 |---|---|---|
 | [`config`](#configuration-config) | `g` | Read/write configuration |
+| [`update`](#update) | — | Update koda to the latest version (uv / pipx / pip) |
 
 Single-letter aliases are reserved and cannot be used as entry shortcuts.
 
@@ -174,6 +175,10 @@ pipx install "git+https://github.com/ngt22/koda-cli.git" --pip-args ".[turso]"
 ```
 
 ## Update
+
+koda can update itself — `koda --update` (or `koda update`) detects how it was
+installed (uv tool, pipx, or pip) and runs the matching upgrade command. The
+commands below are the manual equivalent and remain available as a fallback.
 
 ```bash
 # uv

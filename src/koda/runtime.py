@@ -10,6 +10,7 @@ use.
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 from importlib.metadata import version
@@ -252,3 +253,59 @@ def _validate_list_columns(columns: list[str], source: str) -> None:
         ConfigManager.validate("list.columns", columns)
     except ValidationError:
         exit_error(f"Invalid {source}: {ConfigManager.error_message('list.columns')}")
+
+
+def detect_install_method() -> str | None:
+    """Detect how koda was installed: 'uv', 'pipx', 'venv-pip', 'pip', or None."""
+    uv = shutil.which("uv")
+    if uv:
+        try:
+            out = subprocess.run([uv, "tool", "list"], capture_output=True, text=True, timeout=10)
+            if "koda-cli" in out.stdout:
+                return "uv"
+        except (OSError, subprocess.SubprocessError):
+            pass
+    pipx = shutil.which("pipx")
+    if pipx:
+        try:
+            out = subprocess.run([pipx, "list"], capture_output=True, text=True, timeout=10)
+            if "koda-cli" in out.stdout:
+                return "pipx"
+        except (OSError, subprocess.SubprocessError):
+            pass
+    if sys.prefix != sys.base_prefix:
+        return "venv-pip"
+    if shutil.which("python3"):
+        return "pip"
+    return None
+
+
+def run_update() -> None:
+    """Update koda to the latest version using the detected install method."""
+    method = detect_install_method()
+    if method is None:
+        console.print("[yellow]Could not detect how koda was installed.[/yellow]")
+        console.print("Update manually with one of:")
+        console.print("  uv tool upgrade koda-cli")
+        console.print("  pipx upgrade koda-cli")
+        console.print("  python3 -m pip install --upgrade koda-cli")
+        raise typer.Exit(code=1)
+    cmd = {
+        "uv": ["uv", "tool", "upgrade", "koda-cli"],
+        "pipx": ["pipx", "upgrade", "koda-cli"],
+        "venv-pip": [sys.executable, "-m", "pip", "install", "--upgrade", "koda-cli"],
+        "pip": ["python3", "-m", "pip", "install", "--upgrade", "koda-cli"],
+    }[method]
+    console.print(f"[cyan]Detected install: {method}[/cyan] — running: {' '.join(cmd)}")
+    try:
+        result = subprocess.run(cmd)
+    except OSError as exc:
+        console.print(f"[red]Failed to run update: {exc}[/red]")
+        raise typer.Exit(code=1)
+    raise typer.Exit(code=result.returncode)
+
+
+def update_callback(value: bool) -> None:
+    """Typer eager callback for ``--update``."""
+    if value:
+        run_update()
