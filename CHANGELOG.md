@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - `koda --update` / `koda update` self-update: detects the install method
   (uv tool, pipx, or pip) and runs the matching upgrade command.
+- `koda push --dry-run` (`-n`): previews new/update/delete before pushing,
+  strictly read-only (no pull --rebase, no commit, no push).
+- `koda diff` now ends with an action summary (would-push / would-pull counts
+  and next-command hints) and is read-only — it fetches from the remote
+  instead of running `git pull --rebase` on the sync clone. (#158)
 
 ## [0.4.0] - 2026-08-10
 
