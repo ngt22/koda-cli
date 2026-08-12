@@ -102,7 +102,9 @@ def migrate(
             f"[dim]Open {get_entries_dir().parent} in Obsidian, or `koda list` to verify.[/dim]"
         )
     else:
-        console.print(f"[dim]Open {get_entries_dir().parent} in Obsidian, or `koda list` to verify.[/dim]")
+        console.print(
+            f"[dim]Open {get_entries_dir().parent} in Obsidian, or `koda list` to verify.[/dim]"
+        )
 
 
 def _record_skipped(skipped: list[dict]) -> None:
@@ -121,10 +123,7 @@ def _record_skipped(skipped: list[dict]) -> None:
             f"| {s['uid']} | {s['idx'] if s['idx'] is not None else ''} | "
             f"{s['shortcut'] or ''} | {s['title'] or ''} |"
         )
-    title = (
-        f"migrate: skipped {len(skipped)} duplicate "
-        f"entr{'y' if len(skipped) == 1 else 'ies'}"
-    )
+    title = f"migrate: skipped {len(skipped)} duplicate entr{'y' if len(skipped) == 1 else 'ies'}"
     _write_new_entry("\n".join(lines), tags="migrate", shortcut=None, title=title)
 
 
