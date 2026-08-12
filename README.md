@@ -116,7 +116,7 @@ Grouped the same way as `koda --help`.
 
 | Command | Alias | Description |
 |---|---|---|
-| [`push`](#push-and-pull) | — | Export DB to Git sync repo and push |
+| [`push`](#push-and-pull) | — | Export DB to Git sync repo and push ( `-n` previews) |
 | [`pull`](#push-and-pull) | — | Pull Git sync repo and merge into local DB |
 
 **Data**
@@ -125,7 +125,7 @@ Grouped the same way as `koda --help`.
 |---|---|---|
 | `export` | — | Write all entries as JSON Lines to stdout or a file |
 | `import` | — | Merge a JSONL file into the local database |
-| `diff` | — | Show a uid-level diff against the remote payload |
+| `diff` | — | uid-level diff + would-push/would-pull summary (read-only) |
 | `backup` | — | Write a single-file SQLite snapshot (`VACUUM INTO`) |
 
 **Index**
@@ -881,6 +881,19 @@ koda config get git.sync_format    # → jsonl            (default)
 koda push   # export DB → koda-sync.jsonl, commit, push to remote
 koda pull   # git pull the clone, merge koda-sync.jsonl into local DB
 ```
+
+**Sync checks (read-only, nothing is written):**
+
+- `koda push -n` / `koda push --dry-run` — preview what a push would change
+  (new / update / delete per entry) without touching the clone, the payload
+  file, or the remote. Shows "Nothing to push" when local and remote payloads
+  are in sync.
+- `koda diff` — uid-level diff plus an action summary: how many memos would be
+  pushed (`koda push`) and pulled (`koda pull`), with the next command to run.
+  Entries changed on both sides resolve by `modified_at` — the newer one wins.
+
+Both checks are strictly read-only: they fetch from `origin/<branch>` and never
+run `git pull --rebase`, so the sync clone's working tree is left untouched.
 
 `push` does a `git pull --rebase` before writing the payload so the branch stays linear. `pull` merges by `uid` — entries that already exist locally are updated only if the incoming `modified_at` is newer.
 
