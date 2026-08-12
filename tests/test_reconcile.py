@@ -150,3 +150,26 @@ def test_reconcile_reads_files_written_directly(db):
     assert row.content == "pulled body"
     assert row.tags == "synced"
     assert row.source == "remote"  # not authored locally
+
+
+def test_duplicate_uid_last_file_wins_deterministically(db, seed):
+    """Two entries/*.md files sharing a uid must resolve to the LAST file in
+    filename order, stably across consecutive runs (no mtime-gate flip-flop)."""
+    row = seed("original body")
+    uid = row.uid
+    entries_dir = _entries_dir()
+    dup_path = entries_dir / "zzz-duplicate.md"
+    dup = MdEntry(
+        content="duplicate body",
+        uid=uid,
+        idx=row.idx,
+        created_at="2026-01-01 00:00:00",
+        modified_at="2026-01-01 00:00:00",
+    )
+    md_store.write_entry(entries_dir, dup, path=dup_path)
+
+    reconcile_all(db, entries_dir)  # run 1
+    reconcile_all(db, entries_dir)  # run 2 — must not flip back to "original body"
+
+    assert db.get_memo_by_uid(uid).content == "duplicate body"
+    assert db.path_for(uid) == "zzz-duplicate.md"

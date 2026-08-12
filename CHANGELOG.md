@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `koda --update` / `koda update` self-update: detects the install method
   (uv tool, pipx, or pip) and runs the matching upgrade command.
 
+### Fixed
+- `koda migrate` now skips legacy rows whose uid already exists in the vault
+  instead of writing a duplicate `.md` file. Skipped rows are recorded as a
+  koda entry (tag: `migrate`) and listed in the command output — nothing is
+  overwritten or deleted.
+- `reconcile`: when two `entries/*.md` files share a uid, the cache now
+  deterministically reflects the last file (filename order) on every run
+  instead of flip-flopping between the two (mtime-gate skip no longer
+  overrides a same-scan duplicate).
+
 ## [0.4.0] - 2026-08-10
 
 ### Added
