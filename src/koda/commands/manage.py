@@ -51,12 +51,24 @@ def migrate(
     finally:
         conn.close()
 
+    existing_uids = set(get_db().manifest().keys())
     count = 0
+    skipped: list[dict] = []
     for row in rows:
         d = dict(zip(cols, row))
         content = d.get("content") or ""
         created_at = d.get("created_at")
         uid = d.get("uid") or compute_uid(content, created_at or "")
+        if uid in existing_uids:
+            skipped.append(
+                {
+                    "uid": uid,
+                    "idx": d.get("idx"),
+                    "shortcut": d.get("shortcut"),
+                    "title": d.get("title"),
+                }
+            )
+            continue
         entry = MdEntry(
             content=content,
             uid=uid,

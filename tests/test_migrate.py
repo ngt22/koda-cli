@@ -146,3 +146,19 @@ def test_migrate_without_title_column(tmp_path, db):
     row = db.get_memo_by_uid("notitle000000001")
     assert row.content == "no title body"
     assert row.title is None
+
+
+def test_migrate_skips_rows_with_existing_uid(tmp_path, db, write_md):
+    """migrate -f must not write a duplicate .md for a uid already in the vault,
+    and must not overwrite the existing file (no irreversible writes)."""
+    write_md("vault edited version", idx=0, uid="legacyuid0000001", title="First entry")
+
+    legacy = tmp_path / "koda.db"
+    _make_legacy_db(legacy, [LEGACY_ROWS[0]])
+
+    manage.migrate(db_path=legacy, force=True)
+
+    entries = runtime.get_entries_dir()
+    uids = [md_store.read_entry(p).uid for p in entries.glob("*.md")]
+    assert uids.count("legacyuid0000001") == 1
+    assert db.get_memo_by_uid("legacyuid0000001").content == "vault edited version"
