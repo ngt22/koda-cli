@@ -1,6 +1,6 @@
 [project]
 name = "koda-cli"
-version = "0.5.1"
+version = "0.5.2"
 description = "A fast CLI memo store and command launcher backed by plain Markdown files (Obsidian / editor / AI friendly)."
 readme = "README.md"
 requires-python = ">=3.10"
