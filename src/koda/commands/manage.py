@@ -82,11 +82,50 @@ def migrate(
         write_entry(entries_dir, entry)
         count += 1
 
+    if skipped:
+        _record_skipped(skipped)
+
     reconcile_all(get_db(), entries_dir, force=True)
     console.print(
-        f"[green]Migrated {count} entr{'y' if count == 1 else 'ies'} to {entries_dir}.[/green]\n"
-        f"[dim]Open {get_entries_dir().parent} in Obsidian, or `koda list` to verify.[/dim]"
+        f"[green]Migrated {count} entr{'y' if count == 1 else 'ies'} to {entries_dir}.[/green]"
     )
+    for s in skipped:
+        console.print(
+            f"[yellow]Skipped {s['uid']}[/yellow] "
+            f"(idx {s['idx'] if s['idx'] is not None else '-'}): "
+            f"uid already exists in the vault — no file written."
+        )
+    if skipped:
+        console.print(
+            f"[dim]Skipped {len(skipped)} duplicate entr{'y' if len(skipped) == 1 else 'ies'} "
+            f"recorded as a koda entry (tag: migrate).[/dim]\n"
+            f"[dim]Open {get_entries_dir().parent} in Obsidian, or `koda list` to verify.[/dim]"
+        )
+    else:
+        console.print(f"[dim]Open {get_entries_dir().parent} in Obsidian, or `koda list` to verify.[/dim]")
+
+
+def _record_skipped(skipped: list[dict]) -> None:
+    from .memo import _write_new_entry
+
+    lines = [
+        "These koda.db rows were skipped by `koda migrate` because the vault",
+        "already has an entry with the same uid. Nothing was overwritten or",
+        "deleted.",
+        "",
+        "| uid | idx | shortcut | title |",
+        "| --- | --- | --- | --- |",
+    ]
+    for s in skipped:
+        lines.append(
+            f"| {s['uid']} | {s['idx'] if s['idx'] is not None else ''} | "
+            f"{s['shortcut'] or ''} | {s['title'] or ''} |"
+        )
+    title = (
+        f"migrate: skipped {len(skipped)} duplicate "
+        f"entr{'y' if len(skipped) == 1 else 'ies'}"
+    )
+    _write_new_entry("\n".join(lines), tags="migrate", shortcut=None, title=title)
 
 
 @app.command(rich_help_panel="Data")

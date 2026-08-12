@@ -162,3 +162,20 @@ def test_migrate_skips_rows_with_existing_uid(tmp_path, db, write_md):
     uids = [md_store.read_entry(p).uid for p in entries.glob("*.md")]
     assert uids.count("legacyuid0000001") == 1
     assert db.get_memo_by_uid("legacyuid0000001").content == "vault edited version"
+
+
+def test_migrate_records_skipped_rows_as_koda_entry_and_prints_them(tmp_path, db, write_md, capsys):
+    write_md("vault edited version", idx=0, uid="legacyuid0000001", title="First entry")
+    legacy = tmp_path / "koda.db"
+    _make_legacy_db(legacy, LEGACY_ROWS)
+
+    manage.migrate(db_path=legacy, force=True)
+
+    skip_rows = [r for r in db.get_memos(limit=None) if r.tags == "migrate"]
+    assert len(skip_rows) == 1
+    assert "legacyuid0000001" in skip_rows[0].content
+    assert "First entry" in skip_rows[0].content
+
+    out = capsys.readouterr().out
+    assert "Skipped" in out
+    assert "legacyuid0000001" in out
