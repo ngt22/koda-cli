@@ -119,8 +119,9 @@ Grouped the same way as `koda --help`.
 
 | Command | Alias | Description |
 |---|---|---|
-| [`push`](#push-and-pull) | — | Commit & push the vault's `.md` entries |
+| [`push`](#push-and-pull) | — | Commit & push the vault's `.md` entries (`-n` previews without writing) |
 | [`pull`](#push-and-pull) | — | Pull `.md` entries and reconcile the cache |
+| [`diff`](#push-and-pull) | — | Read-only local-vs-remote check with action hints |
 
 **Data**
 
@@ -834,9 +835,14 @@ Priority order: **CLI flags > environment variables > config file > built-in def
 The vault (`~/.koda-cli`) is **itself a git repository**, and the `entries/*.md` files are the synced artifact — so sync is just plain `git` on files, readable and editable straight from GitHub. There is no JSONL payload and no bespoke merge:
 
 ```bash
-koda push   # git add/commit the entries, then push to the remote
-koda pull   # git pull --rebase, then reconcile the cache from the .md files
+koda push       # git add/commit the entries, then push to the remote
+koda push -n    # preview what a push would commit and push — writes nothing
+koda pull       # git pull --rebase, then reconcile the cache from the .md files
+koda diff       # read-only pre-sync check: local vs remote changes with action hints
 ```
+
+`koda diff` and `koda push -n` are strictly read-only: they only `git fetch`
+and compare, and never modify the vault, commit, or push.
 
 > **Deletions are not synced.** `pull` never deletes entries — removing an
 > entry on one machine does not remove it anywhere else. After a `pull`, a

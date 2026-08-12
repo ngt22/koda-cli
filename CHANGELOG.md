@@ -10,6 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - `koda --update` / `koda update` self-update: detects the install method
   (uv tool, pipx, or pip) and runs the matching upgrade command.
+- `koda push --dry-run` (`-n`): previews what a push would commit and push
+  (new / updated / deleted entries, plus ahead/behind vs the remote) without
+  writing anything — no commit, no push, no `pull --rebase`.
+- `koda diff`: read-only pre-sync check showing local vs remote changes with
+  action hints (`koda push` / `koda pull`); prints "In sync with the remote."
+  when there is nothing to do.
 
 ### Fixed
 - `koda migrate` now skips legacy rows whose uid already exists in the vault
