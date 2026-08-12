@@ -150,7 +150,8 @@ def _preview_push(vault: Path) -> None:
     if not _is_repo(vault):
         exit_error("Vault is not a git repository yet. Run `koda push` first.")
     status = _git(
-        vault, "-c", "core.quotepath=false", "status", "--porcelain", check=False
+        vault, "-c", "core.quotepath=false", "status", "--porcelain",
+        "--untracked-files=all", check=False,
     ).stdout
     changes = _classify_changes(status)
     if changes:
@@ -166,9 +167,9 @@ def _preview_push(vault: Path) -> None:
         ahead = _git(vault, "rev-list", "--count", "@{u}..HEAD", check=False).stdout.strip()
         behind = _git(vault, "rev-list", "--count", "HEAD..@{u}", check=False).stdout.strip()
         remote = f"{_first_remote(vault)}/{_current_branch(vault)}"
-        if ahead:
+        if ahead not in ("", "0"):
             console.print(f"[dim]Would push {ahead} commit(s) to {remote}.[/dim]")
-        if behind:
+        if behind not in ("", "0"):
             console.print(
                 f"[yellow]Remote has {behind} commit(s) your vault does not — "
                 f"run `koda pull` first.[/yellow]"
