@@ -4,43 +4,42 @@
 CLI as a real subprocess and inspect its output.
 """
 
+import os
+import shutil
 import subprocess
 import sys
 
-from koda.db import MemoDatabase
+from _helpers import build_vault
 
 ENV_KEYS = ("PATH", "HOME")
 
 
-def _base_env(tmp_path, db_path):
-    import os
-
+def _base_env(tmp_path, vault):
     env = {k: os.environ[k] for k in ENV_KEYS if k in os.environ}
-    env["KODA_DB_PATH"] = str(db_path)
-    env["KODA_DB_PATH_OVERRIDE"] = "1"  # allow the temp DB path outside the data dir
+    env["KODA_VAULT_PATH"] = str(vault)
+    env["KODA_DB_PATH_OVERRIDE"] = "1"  # allow the temp vault outside $HOME
     env["KODA_CONFIG_PATH"] = str(tmp_path / "nonexistent.toml")
     return env
 
 
+def _make_vault(tmp_path, specs):
+    """Rebuild a fresh vault under ``tmp_path`` seeded with ``specs``."""
+    vault = tmp_path / "vault"
+    if vault.exists():
+        shutil.rmtree(vault)
+    build_vault(vault, specs)
+    return vault
+
+
 def _run_x(tmp_path, body, extra=()):
-    db_path = tmp_path / "exec.db"
-    seed = MemoDatabase(backend="local", path=db_path)
-    seed.init_db()
-    seed.add_memo(
-        uid="exec001",
-        idx=1,
-        shortcut=None,
-        content=body,
-        tags="",
-        created_at="2026-01-01 00:00:00",
-        modified_at="2026-01-01 00:00:00",
-    )
+    vault = _make_vault(tmp_path, [{"content": body, "idx": 1, "uid": "exec001000000000"}])
     return subprocess.run(
         [sys.executable, "-c", "from koda.main import app; app()", "x", *extra],
         capture_output=True,
         text=True,
         stdin=subprocess.DEVNULL,
-        env=_base_env(tmp_path, db_path),
+        env=_base_env(tmp_path, vault),
+        timeout=30,
     )
 
 
@@ -70,22 +69,20 @@ def test_heredoc_body(tmp_path):
 
 
 def _seed_remote(tmp_path, body):
-    db_path = tmp_path / "exec.db"
-    seed = MemoDatabase(backend="local", path=db_path)
-    seed.init_db()
-    seed.add_memo("rem00001", 1, None, body, "", "2026-01-01 00:00:00", "2026-01-01 00:00:00")
-    with seed.connection() as conn:
-        conn.execute("UPDATE memos SET source = 'remote' WHERE uid = ?", ("rem00001",))
-    return db_path
+    return _make_vault(
+        tmp_path,
+        [{"content": body, "idx": 1, "uid": "rem00001000000000", "source": "remote"}],
+    )
 
 
-def _run(tmp_path, db_path, *args):
+def _run(tmp_path, vault, *args):
     return subprocess.run(
         [sys.executable, "-c", "from koda.main import app; app()", "x", *args],
         capture_output=True,
         text=True,
         stdin=subprocess.DEVNULL,
-        env=_base_env(tmp_path, db_path),
+        env=_base_env(tmp_path, vault),
+        timeout=30,
     )
 
 
@@ -116,10 +113,10 @@ def test_local_entry_runs_without_prompt(tmp_path):
 
 def test_remote_entry_runs_when_confirm_disabled(tmp_path):
     """With exec.confirm_remote=false, a remote entry runs without prompting."""
-    db_path = _seed_remote(tmp_path, "echo OPTED_OUT")
+    vault = _seed_remote(tmp_path, "echo OPTED_OUT")
     config_path = tmp_path / "config.toml"
     config_path.write_text("[exec]\nconfirm_remote = false\n", encoding="utf-8")
-    env = _base_env(tmp_path, db_path)
+    env = _base_env(tmp_path, vault)
     env["KODA_CONFIG_PATH"] = str(config_path)
     result = subprocess.run(
         [sys.executable, "-c", "from koda.main import app; app()", "x", "1"],
@@ -127,6 +124,7 @@ def test_remote_entry_runs_when_confirm_disabled(tmp_path):
         text=True,
         stdin=subprocess.DEVNULL,
         env=env,
+        timeout=30,
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "OPTED_OUT"
@@ -154,7 +152,7 @@ def test_dry_run_has_no_side_effect(tmp_path):
     assert real.returncode == 0, real.stderr
     assert marker.exists()
     marker.unlink()
-    (tmp_path / "exec.db").unlink()  # reset so _run_x can re-seed cleanly
+    # _run_x rebuilds the vault from scratch, so no explicit reset is needed.
 
     # Dry run: identical body, but nothing executes -> the marker stays absent.
     dry = _run_x(tmp_path, body, extra=("-n",))
@@ -180,18 +178,16 @@ def test_dry_run_on_remote_entry_does_not_prompt(tmp_path):
 
 def test_dry_run_reads_ref_from_stdin(tmp_path):
     """`koda x -n` with no ref argument reads a single ref from stdin."""
-    db_path = tmp_path / "exec.db"
-    seed = MemoDatabase(backend="local", path=db_path)
-    seed.init_db()
-    seed.add_memo(
-        "stdin001", 7, None, "echo FROM_STDIN", "", "2026-01-01 00:00:00", "2026-01-01 00:00:00"
+    vault = _make_vault(
+        tmp_path, [{"content": "echo FROM_STDIN", "idx": 7, "uid": "stdin001000000000"}]
     )
     result = subprocess.run(
         [sys.executable, "-c", "from koda.main import app; app()", "x", "-n"],
         capture_output=True,
         text=True,
         input="7\n",
-        env=_base_env(tmp_path, db_path),
+        env=_base_env(tmp_path, vault),
+        timeout=30,
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.rstrip().endswith("'echo FROM_STDIN'")

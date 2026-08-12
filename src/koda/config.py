@@ -22,8 +22,12 @@ from .db import VALID_SORT_COLUMNS
 console = Console()
 
 
-DEFAULT_DB_DIR = Path.home() / ".local" / "share" / "koda"
-DEFAULT_DB_PATH = DEFAULT_DB_DIR / "koda.db"
+# The vault: a directory koda owns, holding the Markdown entries and the
+# derived cache. The user points Obsidian / their editor at this directory.
+DEFAULT_VAULT_DIR = Path.home() / ".koda-cli"
+
+# Legacy SQLite location (koda <= 1.x); read only by `koda migrate`.
+LEGACY_DB_PATH = Path.home() / ".local" / "share" / "koda" / "koda.db"
 
 DEFAULT_CONFIG_DIR = Path(os.getenv("XDG_CONFIG_HOME", Path.home() / ".config")) / "koda"
 DEFAULT_CONFIG_PATH = DEFAULT_CONFIG_DIR / "config.toml"
@@ -47,8 +51,6 @@ COLUMN_DEFS: dict = {
 }
 
 
-GIT_SYNC_FORMAT_JSONL = "jsonl"
-
 EXEC_SHELL_ALLOWLIST = ("sh", "bash", "zsh", "fish")
 
 
@@ -65,16 +67,8 @@ EXAMPLE_TEMPLATE = (
     '# sort_by = "idx"\n'
     "# desc = false\n"
     '# display = "title"   # title | body | full | both\n\n'
-    "# [db]\n"
-    f'# path = "{DEFAULT_DB_PATH}"\n'
-    '# backend = "local"   # "local" or "turso"\n\n'
-    "# [turso]\n"
-    '# url = "libsql://your-db.turso.io"   # or set KODA_TURSO_URL\n'
-    '# token = "your-auth-token"            # or set KODA_TURSO_TOKEN\n\n'
-    "# [git]\n"
-    '# sync_path = "/path/to/koda-sync-repo"    # clone root, or use KODA_GIT_SYNC_PATH\n'
-    '# payload_file = "koda-sync.jsonl"         # relative to sync_path (JSON Lines)\n'
-    '# sync_format = "jsonl"                     # or KODA_GIT_SYNC_FORMAT\n\n'
+    "# [vault]\n"
+    f'# path = "{DEFAULT_VAULT_DIR}"   # directory holding entries/*.md; open this in Obsidian\n\n'
     "# [exec]\n"
     '# shell = "sh"\n'
     "# Prompt before running entries pulled from a remote (source=remote).\n"
@@ -85,26 +79,31 @@ EXAMPLE_TEMPLATE = (
 )
 
 
-DB_PATH_OVERRIDE_ENV = "KODA_DB_PATH_OVERRIDE"
+PATH_OVERRIDE_ENV = "KODA_DB_PATH_OVERRIDE"
+
+# Sensitive dot-dirs under $HOME that vault.path must not point at (or into) —
+# koda writes entries/*.md, a .gitignore, and inits a git repo, any of which
+# could clobber credentials/keys if the vault were pointed here.
+_HOME_DENYLIST = (
+    ".ssh",
+    ".gnupg",
+    ".aws",
+    ".config",
+    ".kube",
+    ".docker",
+    ".gcloud",
+    ".azure",
+)
 
 
-def allowed_db_roots() -> list[Path]:
-    """Directories a local db.path may live under: the default koda data dir
-    (~/.local/share/koda) and, when set, $XDG_DATA_HOME/koda."""
-    roots = [DEFAULT_DB_DIR]
-    xdg = os.getenv("XDG_DATA_HOME")
-    if xdg and xdg.strip():
-        roots.append(Path(xdg) / "koda")
-    return [r.expanduser() for r in roots]
-
-
-def db_path_allowed(v: Any) -> bool:
-    """True if ``v`` is a local DB path inside an allowed data dir. Blocks
-    ``KODA_DB_PATH=/home/victim/.ssh/authorized_keys`` and similar env/config
-    injection from creating arbitrary files via init_db. The
+def vault_path_allowed(v: Any) -> bool:
+    """True if ``v`` is a safe vault directory. koda creates ``entries/*.md`` and
+    a ``.koda`` cache inside it, so a tampered config/env must not point it at a
+    sensitive system location. Allowed: any path under ``$HOME`` that isn't a
+    known sensitive dot-dir (``~/.ssh``, ``~/.aws``, ...) or inside one. The
     ``KODA_DB_PATH_OVERRIDE`` env var (truthy) lifts the restriction for CI and
-    tests that need a temp location."""
-    if os.getenv(DB_PATH_OVERRIDE_ENV):
+    tests that use a temp location."""
+    if os.getenv(PATH_OVERRIDE_ENV):
         return True
     if not isinstance(v, str) or not v.strip():
         return False
@@ -112,27 +111,12 @@ def db_path_allowed(v: Any) -> bool:
         resolved = Path(v).expanduser().resolve()
     except (OSError, RuntimeError, ValueError):
         return False
-    for root in allowed_db_roots():
-        try:
-            resolved.relative_to(root.resolve())
-            return True
-        except ValueError:
-            continue
-    return False
-
-
-def valid_payload_file(v: Any) -> bool:
-    """True if ``v`` is a safe relative payload path. Rejects empty values,
-    absolute paths, ``..`` traversal, and any path with a ``.git`` component.
-    The last guard stops a tampered config from steering `koda push` into
-    ``.git/hooks/post-merge`` (or any other repo-internal file), which would
-    let a written payload execute on the next git operation."""
-    if not isinstance(v, str) or len(v.strip()) == 0:
+    home = Path.home().resolve()
+    try:
+        rel = resolved.relative_to(home)
+    except ValueError:
         return False
-    parts = Path(v).parts
-    if Path(v).is_absolute() or ".." in parts or ".git" in parts:
-        return False
-    return True
+    return rel.parts[:1] not in [(d,) for d in _HOME_DENYLIST]
 
 
 def valid_exec_shell(v: Any) -> bool:
@@ -184,11 +168,6 @@ class DefaultCmd(str, Enum):
     ADD = "add"
 
 
-class DbBackend(str, Enum):
-    LOCAL = "local"
-    TURSO = "turso"
-
-
 @dataclass
 class Config:
     """Typed snapshot of resolved configuration (defaults < file < env)."""
@@ -201,13 +180,7 @@ class Config:
     list_desc: bool = False
     list_columns: list[str] = field(default_factory=lambda: ["idx", "sc", "tags", "content"])
     list_display: str = "title"
-    db_path: str = str(DEFAULT_DB_PATH)
-    db_backend: str = "local"
-    turso_url: str = ""
-    turso_token: str = ""
-    git_sync_path: str = ""
-    git_payload_file: str = "koda-sync.jsonl"
-    git_sync_format: str = GIT_SYNC_FORMAT_JSONL
+    vault_path: str = str(DEFAULT_VAULT_DIR)
     exec_shell: str = "sh"
     exec_confirm_remote: bool = True
 
@@ -258,29 +231,11 @@ _FIELD_SPECS: dict[str, FieldSpec] = {
         lambda v: v in ("title", "body", "full", "both"),
         "must be one of: title, body, full, both",
     ),
-    "db.path": FieldSpec(
+    "vault.path": FieldSpec(
         str,
-        db_path_allowed,
-        "must be inside the koda data dir (~/.local/share/koda or "
-        "$XDG_DATA_HOME/koda); set KODA_DB_PATH_OVERRIDE=1 to allow another location",
-    ),
-    "db.backend": FieldSpec(
-        str,
-        lambda v: v in tuple(b.value for b in DbBackend),
-        "must be 'local' or 'turso'",
-    ),
-    "turso.url": FieldSpec(str),
-    "turso.token": FieldSpec(str),
-    "git.sync_path": FieldSpec(str),
-    "git.payload_file": FieldSpec(
-        str,
-        valid_payload_file,
-        "must be a non-empty path relative to git.sync_path without '..' or '.git' components",
-    ),
-    "git.sync_format": FieldSpec(
-        str,
-        lambda v: str(v).strip().lower() == GIT_SYNC_FORMAT_JSONL,
-        f"must be {GIT_SYNC_FORMAT_JSONL!r} (case-insensitive)",
+        vault_path_allowed,
+        "must be a directory under $HOME, outside sensitive dirs like ~/.ssh; "
+        "set KODA_DB_PATH_OVERRIDE=1 to allow another location",
     ),
     "exec.shell": FieldSpec(
         str,
@@ -296,12 +251,7 @@ ALL_KEYS: list[str] = list(_FIELD_SPECS.keys())
 
 _ENV_OVERRIDES: list[tuple[str, str, Callable[[str], Any]]] = [
     ("defaults.cmd", "KODA_DEFAULT_CMD", lambda v: v),
-    ("db.path", "KODA_DB_PATH", lambda v: v),
-    ("turso.url", "KODA_TURSO_URL", lambda v: v),
-    ("turso.token", "KODA_TURSO_TOKEN", lambda v: v),
-    ("git.sync_path", "KODA_GIT_SYNC_PATH", lambda v: v),
-    ("git.payload_file", "KODA_GIT_PAYLOAD_FILE", lambda v: v),
-    ("git.sync_format", "KODA_GIT_SYNC_FORMAT", lambda v: v.strip().lower()),
+    ("vault.path", "KODA_VAULT_PATH", lambda v: v),
 ]
 
 

@@ -1,14 +1,14 @@
 [project]
 name = "koda-cli"
-version = "0.4.0"
-description = "A fast CLI memo store and command launcher backed by SQLite or Turso."
+version = "0.5.0"
+description = "A fast CLI memo store and command launcher backed by plain Markdown files (Obsidian / editor / AI friendly)."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [
     { name = "ngt22" }
 ]
-keywords = ["koda", "memo", "snippet", "cli", "productivity", "sqlite"]
+keywords = ["koda", "memo", "snippet", "cli", "productivity", "markdown", "obsidian"]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
@@ -24,11 +24,9 @@ classifiers = [
 dependencies = [
     "typer>=0.12.3",
     "rich>=13.7.1",
+    "PyYAML>=6.0",
     "tomli>=2.0; python_version < '3.11'",
 ]
-
-[project.optional-dependencies]
-turso = ["libsql-experimental>=0.0.1"]
 
 [dependency-groups]
 dev = ["pytest", "pytest-cov", "ruff", "mypy"]

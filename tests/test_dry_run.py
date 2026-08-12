@@ -1,28 +1,19 @@
 """--dry-run on compact / shift / move / tag must not touch the DB (#75)."""
 
 import pytest
+from _helpers import put_entry
 
-import koda.runtime as runtime
 from koda.commands import index, memo
 from koda.constants import TAG_SEPARATOR
 
 
 @pytest.fixture
-def wired_db(db, monkeypatch):
-    monkeypatch.setattr(runtime, "_db", db)
+def wired_db(db):
     return db
 
 
 def _seed(db, idx, content="x", tags=()):
-    db.add_memo(
-        uid=f"uid{idx:04d}",
-        idx=idx,
-        shortcut=None,
-        content=content,
-        tags=TAG_SEPARATOR.join(tags),
-        created_at="2026-01-01 00:00:00",
-        modified_at="2026-01-01 00:00:00",
-    )
+    put_entry(content, idx=idx, tags=TAG_SEPARATOR.join(tags), uid=f"uid{idx:04d}00000000")
 
 
 def _idxs(db):

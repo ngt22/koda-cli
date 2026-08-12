@@ -1,10 +1,11 @@
-"""Tests for the widened (64-bit) uid: generation, collision resistance,
-prefix lookup, and legacy short-uid sync compatibility (#46)."""
+"""Tests for the widened (64-bit) uid: generation, collision resistance, and
+prefix lookup (#46)."""
 
 import string
 
+from _helpers import put_entry
+
 from koda.db import UID_LENGTH, MemoDatabase, compute_uid
-from koda.git_sync import MemoMerger
 
 
 def test_uid_is_16_lowercase_hex_chars():
@@ -43,65 +44,25 @@ def test_widening_keeps_legacy_7char_prefix():
 
 def test_get_memo_by_uid_prefix_single_match(db: MemoDatabase):
     full = compute_uid("body", "2026-01-01 00:00:00")
-    db.add_memo(full, 0, None, "body", "", "2026-01-01 00:00:00", "2026-01-01 00:00:00")
+    put_entry("body", idx=0, uid=full)
     row = db.get_memo_by_uid_prefix(full[:7])
     assert row is not None and row.uid == full
 
 
 def test_get_memo_by_uid_prefix_ambiguous_returns_none(db: MemoDatabase):
-    db.add_memo("abcdef01", 0, None, "a", "", "2026-01-01 00:00:00", "2026-01-01 00:00:00")
-    db.add_memo("abcdef02", 1, None, "b", "", "2026-01-01 00:00:00", "2026-01-01 00:00:00")
+    put_entry("a", idx=0, uid="abcdef01")
+    put_entry("b", idx=1, uid="abcdef02")
     assert db.get_memo_by_uid_prefix("abcdef") is None
 
 
 def test_get_memo_by_uid_prefix_no_match_returns_none(db: MemoDatabase):
-    db.add_memo("abcdef0123456789", 0, None, "a", "", "2026-01-01 00:00:00", "2026-01-01 00:00:00")
+    put_entry("a", idx=0, uid="abcdef0123456789")
     assert db.get_memo_by_uid_prefix("ffffff") is None
     assert db.get_memo_by_uid_prefix("") is None
 
 
 def test_get_memo_by_uid_prefix_escapes_like_wildcards(db: MemoDatabase):
-    db.add_memo("abcdef0123456789", 0, None, "a", "", "2026-01-01 00:00:00", "2026-01-01 00:00:00")
+    put_entry("a", idx=0, uid="abcdef0123456789")
     # '%'/'_' must be matched literally, not as LIKE wildcards.
     assert db.get_memo_by_uid_prefix("a%") is None
     assert db.get_memo_by_uid_prefix("_bcdef") is None
-
-
-def _entry(uid, idx, content="body", modified_at="2026-01-01 00:00:00"):
-    return {
-        "uid": uid,
-        "idx": idx,
-        "shortcut": None,
-        "content": content,
-        "tags": "",
-        "created_at": "2026-01-01 00:00:00",
-        "modified_at": modified_at,
-    }
-
-
-def test_merge_legacy_short_uid_updates_widened_row(db: MemoDatabase):
-    """A pre-widening peer emits a 7-char uid; merging it into a widened DB
-    must update the existing row by prefix instead of inserting a duplicate."""
-    full = compute_uid("body", "2026-01-01 00:00:00")
-    db.add_memo(full, 0, None, "body", "", "2026-01-01 00:00:00", "2026-01-01 00:00:00")
-
-    inserted, updated, skipped, _ = MemoMerger(db).merge(
-        [_entry(full[:7], 0, content="updated", modified_at="2026-02-01 00:00:00")]
-    )
-    assert (inserted, updated, skipped) == (0, 1, 0)
-    assert db.get_memo_by_uid(full).content == "updated"
-    # No duplicate row was created.
-    assert len(db.get_memos(limit=None)) == 1
-
-
-def test_merge_ambiguous_short_uid_inserts_new(db: MemoDatabase):
-    """If a short uid prefix is ambiguous, fall back to insert (no wrong merge)."""
-    db.add_memo(
-        "abcdef01" + "0" * 8, 0, None, "a", "", "2026-01-01 00:00:00", "2026-01-01 00:00:00"
-    )
-    db.add_memo(
-        "abcdef02" + "0" * 8, 1, None, "b", "", "2026-01-01 00:00:00", "2026-01-01 00:00:00"
-    )
-    inserted, updated, _, _ = MemoMerger(db).merge([_entry("abcdef", 2, content="c")])
-    assert inserted == 1 and updated == 0
-    assert len(db.get_memos(limit=None)) == 3

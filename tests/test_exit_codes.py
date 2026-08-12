@@ -2,6 +2,7 @@
 
 import pytest
 import typer
+from _helpers import put_entry
 
 import koda.runtime as runtime
 from koda.cli_utils import ExitCode
@@ -9,8 +10,7 @@ from koda.commands import memo
 
 
 @pytest.fixture
-def wired_db(db, monkeypatch):
-    monkeypatch.setattr(runtime, "_db", db)
+def wired_db(db):
     return db
 
 
@@ -33,9 +33,7 @@ class TestResolveRefNotFound:
 
 class TestCancelExitCode:
     def test_declined_remove_exits_cancelled(self, wired_db, monkeypatch):
-        wired_db.add_memo(
-            "uid0001", 0, None, "keep me", "", "2026-01-01 00:00:00", "2026-01-01 00:00:00"
-        )
+        put_entry("keep me", idx=0, uid="uid0001")
         monkeypatch.setattr("koda.commands.memo.confirm", lambda *a, **k: False)
         with pytest.raises(typer.Exit) as exc:
             memo.rm(indices=["0"], tag=None, query=None, all_entries=False, force=False)

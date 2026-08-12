@@ -4,8 +4,9 @@ import pytest
 
 from koda.models import MemoRow
 
-# Canonical 10-column row matching _MEMO_COLUMNS in db.py:
-# id, uid, idx, content, tags, shortcut, created_at, modified_at, source, title
+# Canonical 11-column row matching _MEMO_COLUMNS in db.py:
+# id, uid, idx, content, tags, shortcut, created_at, modified_at, source,
+# title, description
 _ROW = (
     1,
     "abc1234",
@@ -17,6 +18,7 @@ _ROW = (
     "2026-01-02 00:00:00",
     "local",
     "My Title",
+    "A summary",
 )
 
 
@@ -24,7 +26,7 @@ class TestFromRow:
     def test_none_returns_none(self):
         assert MemoRow.from_row(None) is None
 
-    def test_ten_columns_materializes(self):
+    def test_eleven_columns_materializes(self):
         memo = MemoRow.from_row(_ROW)
         assert memo is not None
         assert memo.id == 1
@@ -37,17 +39,19 @@ class TestFromRow:
         assert memo.modified_at == "2026-01-02 00:00:00"
         assert memo.source == "local"
         assert memo.title == "My Title"
+        assert memo.description == "A summary"
 
-    def test_to_dict_includes_title(self):
+    def test_to_dict_includes_title_and_description(self):
         memo = MemoRow.from_row(_ROW)
         assert memo is not None
         d = memo.to_dict()
         assert d["title"] == "My Title"
+        assert d["description"] == "A summary"
 
-    def test_nine_columns_raises_assertion(self):
+    def test_ten_columns_raises_assertion(self):
         with pytest.raises(AssertionError):
-            MemoRow.from_row(_ROW[:9])
+            MemoRow.from_row(_ROW[:10])
 
-    def test_eleven_columns_raises_assertion(self):
+    def test_twelve_columns_raises_assertion(self):
         with pytest.raises(AssertionError):
             MemoRow.from_row((*_ROW, "extra"))

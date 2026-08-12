@@ -36,10 +36,7 @@ def _render_config(json_output: bool) -> None:
         out: dict[str, dict[str, object]] = {}
         for dotkey in _ALL_KEYS:
             section, _, key = dotkey.partition(".")
-            val = ConfigManager.get(get_config(), dotkey)
-            if dotkey == "turso.token" and val:
-                val = "****"  # never emit the token, consistent with the table view
-            out.setdefault(section, {})[key] = val
+            out.setdefault(section, {})[key] = ConfigManager.get(get_config(), dotkey)
         sys.stdout.write(json.dumps(out, ensure_ascii=False, indent=2) + "\n")
         return
     key_width = max(len(k) for k in _ALL_KEYS)
@@ -52,8 +49,7 @@ def _render_config(json_output: bool) -> None:
         val = ConfigManager.get(get_config(), dotkey)
         src = get_config_sources().get(dotkey, "default")
         label = src_labels.get(src, "[dim]default[/dim]")
-        display_val = "****" if dotkey == "turso.token" and val else str(val)
-        console.print(f"  {dotkey:<{key_width}} = {display_val:<24} {label}")
+        console.print(f"  {dotkey:<{key_width}} = {str(val):<24} {label}")
 
 
 @config_app.callback(invoke_without_command=True)
@@ -85,22 +81,11 @@ def config_show_cmd(
 @config_app.command("get")
 def config_get(
     key: str = typer.Argument(..., help="Config key (e.g. defaults.cmd)."),
-    reveal: bool = typer.Option(
-        False, "--reveal", help="Print secret values (e.g. turso.token) in clear text."
-    ),
 ) -> None:
-    """Print a single config value (plain text, for scripting).
-
-    Secret values such as ``turso.token`` are masked as ``****`` unless
-    ``--reveal`` is given, so the token does not leak into shell history,
-    CI logs, or terminal scrollback by accident.
-    """
+    """Print a single config value (plain text, for scripting)."""
     if key not in _ALL_KEYS:
         exit_error(f"Unknown key: {key!r}. Valid keys: {', '.join(sorted(_ALL_KEYS))}")
-    val = ConfigManager.get(get_config(), key)
-    if key == "turso.token" and val and not reveal:
-        val = "****"
-    sys.stdout.write(str(val) + "\n")
+    sys.stdout.write(str(ConfigManager.get(get_config(), key)) + "\n")
 
 
 @config_app.command("set")

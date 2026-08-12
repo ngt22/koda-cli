@@ -13,13 +13,14 @@ from rich.text import Text
 
 from ..cli_utils import ExitCode, confirm, exit_error
 from ..cmd_helpers.display import print_memo as _print_memo
-from ..cmd_helpers.metadata import first_footer_index, last_footer_segment
 from ..cmd_helpers.parsing import parse_indices, parse_tag_args
 from ..config import COLUMN_DEFS, VALID_LIST_COLUMNS, VALID_SORT_COLUMNS
 from ..constants import DATETIME_FMT, TAG_SEPARATOR
-from ..db import IntegrityErrors as _IntegrityErrors
 from ..db import compute_uid
 from ..main import RESERVED_SHORTCUTS, app
+from ..md_store import MdEntry, read_entry, write_entry
+from ..models import MemoRow
+from ..reconcile import sync_path
 from ..runtime import (
     _read_stdin_refs,
     _validate_list_columns,
@@ -27,6 +28,7 @@ from ..runtime import (
     emit_raw,
     get_config,
     get_db,
+    get_entries_dir,
     init_db,
     launch_editor,
     resolve_ref,
@@ -35,6 +37,43 @@ from ..runtime import (
 
 def _generate_uid(content: str, created_at: str) -> str:
     return compute_uid(content, created_at)
+
+
+def _now() -> str:
+    return datetime.now().strftime(DATETIME_FMT)
+
+
+def _entry_file(row: MemoRow) -> Path | None:
+    """Absolute path of the ``.md`` file backing ``row`` (or None if unknown)."""
+    rel = get_db().path_for(row.uid)
+    return get_entries_dir() / rel if rel else None
+
+
+def _write_new_entry(
+    content: str,
+    tags: str,
+    shortcut: str | None,
+    title: str | None,
+    description: str | None = None,
+) -> MdEntry:
+    """Create a brand-new ``.md`` entry (truth), then reflect it into the cache
+    as koda-authored (``source='local'``). Returns the written entry."""
+    now = _now()
+    entries_dir = get_entries_dir()
+    entry = MdEntry(
+        content=content,
+        uid=compute_uid(content, now),
+        idx=get_db().allocate_idx(),
+        shortcut=shortcut,
+        tags=tags,
+        title=title,
+        description=description,
+        created_at=now,
+        modified_at=now,
+    )
+    path = write_entry(entries_dir, entry)
+    sync_path(get_db(), entries_dir, path, blessed=True)
+    return entry
 
 
 def _validate_shortcut(shortcut: str | None) -> str | None:
@@ -62,18 +101,6 @@ def _validate_title(title: str | None) -> str | None:
     return stripped
 
 
-def update_memo_full(
-    memo_id: int,
-    content: str,
-    tags: str,
-    shortcut: str | None,
-    created_at: str,
-    title: str | None = None,
-):
-    now = datetime.now().strftime(DATETIME_FMT)
-    get_db().update_memo(memo_id, content, tags, shortcut, created_at, now, title=title)
-
-
 def _add_impl(
     text: list[str] | None = None,
     tag: list[str] | None = None,
@@ -82,6 +109,7 @@ def _add_impl(
     print_uid: bool = False,
     print_idx: bool = False,
     title: str | None = None,
+    description: str | None = None,
 ) -> None:
     shortcut = _validate_shortcut(shortcut)
     title = _validate_title(title)
@@ -114,14 +142,12 @@ def _add_impl(
 
     formatted_tags = TAG_SEPARATOR.join(dict.fromkeys(parse_tag_args(tag)))
 
-    now = datetime.now().strftime(DATETIME_FMT)
-    uid = _generate_uid(content, now)
-    try:
-        new_idx = get_db().add_memo_auto_idx(
-            uid, shortcut, content, formatted_tags, now, now, title=title
-        )
-    except _IntegrityErrors:
+    if shortcut and get_db().get_memo_by_shortcut(shortcut) is not None:
         exit_error(f"Shortcut {shortcut!r} is already in use.")
+
+    entry = _write_new_entry(content, formatted_tags, shortcut, title, description)
+    uid, new_idx = entry.uid, entry.idx
+    assert uid is not None  # _write_new_entry always assigns one
 
     if print_uid:
         sys.stdout.write(uid + "\n")
@@ -148,6 +174,9 @@ def add(
     title: str | None = typer.Option(
         None, "--title", help="Human-readable display label (single line, no alias)."
     ),
+    description: str | None = typer.Option(
+        None, "--description", help="One-line summary stored in the entry's frontmatter."
+    ),
     quiet: bool = typer.Option(
         False, "--quiet", help="Suppress the success message (for scripting)."
     ),
@@ -160,7 +189,14 @@ def add(
 ):
     """Create an entry from arguments, stdin, or your editor. Alias: `koda a`."""
     _add_impl(
-        text, tag, shortcut, quiet=quiet, print_uid=print_uid, print_idx=print_idx, title=title
+        text,
+        tag,
+        shortcut,
+        quiet=quiet,
+        print_uid=print_uid,
+        print_idx=print_idx,
+        title=title,
+        description=description,
     )
 
 
@@ -221,9 +257,11 @@ def rm(
         if not force and not confirm(f"\nDelete {n} entr{'y' if n == 1 else 'ies'}?"):
             exit_error("Cancelled.", code=ExitCode.CANCELLED, style="yellow")
 
-        ids = [row.id for row in target_rows]
-        with get_db().connection() as conn:
-            conn.executemany("DELETE FROM memos WHERE id = ?", [(id_,) for id_ in ids])
+        for row in target_rows:
+            p = _entry_file(row)
+            if p and p.exists():
+                p.unlink()
+            get_db().delete_by_uid(row.uid)
         console.print(f"[red]Deleted {n} entr{'y' if n == 1 else 'ies'}.[/red]")
 
     else:
@@ -243,7 +281,10 @@ def rm(
         if not force and not confirm("Delete this entry?"):
             exit_error("Cancelled.", code=ExitCode.CANCELLED, style="yellow")
 
-        get_db().delete_memo(row.id)
+        p = _entry_file(row)
+        if p and p.exists():
+            p.unlink()
+        get_db().delete_by_uid(row.uid)
         preview = row.content.splitlines()[0][:50] if row.content else ""
         console.print(f"[red]Deleted [{row.idx}]: {preview}...[/red]")
 
@@ -257,13 +298,9 @@ def copy(
     """Duplicate an entry to a new row (same body and tags, no shortcut). Alias: `koda c`."""
     init_db()
     row = resolve_ref(ref)
-    now = datetime.now().strftime(DATETIME_FMT)
-    new_uid = _generate_uid(row.content or "", now)
-    # A copy keeps the source title (display label travels with the body).
-    new_idx = get_db().add_memo_auto_idx(
-        new_uid, None, row.content, row.tags, now, now, title=row.title
-    )
-    console.print(f"[green]Copied [{row.idx}] → [{new_idx}] ({new_uid}).[/green]")
+    # A copy keeps the source title/description (display labels travel with the body).
+    entry = _write_new_entry(row.content or "", row.tags or "", None, row.title, row.description)
+    console.print(f"[green]Copied [{row.idx}] → [{entry.idx}] ({entry.uid}).[/green]")
 
 
 @app.command(rich_help_panel="Core")
@@ -273,99 +310,45 @@ def edit(
     ),
     quiet: bool = typer.Option(False, "--quiet", help="Suppress the success message."),
 ):
-    """Open an entry in $EDITOR (body plus tags/shortcut/metadata footer). Alias: `koda e`."""
+    """Open an entry's Markdown file in $EDITOR (frontmatter + body).
+
+    You edit the real ``.md`` directly, so every field — body, tags, shortcut,
+    title, description — is right there in the file. Reviewing an entry this way
+    marks it trusted (``source='local'``), clearing any remote warning on exec.
+    Alias: `koda e`.
+    """
     init_db()
     row = resolve_ref(ref)
-    memo_id = row.id
-    content, tags, shortcut, created_at, idx = (
-        row.content,
-        row.tags,
-        row.shortcut,
-        row.created_at,
-        row.idx,
-    )
+    path = _entry_file(row)
+    if path is None or not path.exists():
+        exit_error(
+            "Entry file not found. The cache may be stale; run `koda reindex`.",
+            code=ExitCode.NOT_FOUND,
+        )
 
-    sc_line = f"shortcut: {shortcut}" if shortcut else "shortcut: "
-    title_line = f"title: {row.title}" if row.title else "title: "
-    template = (
-        f"{content}\n\n---\n# Metadata\n{title_line}\ntags: {tags}\n"
-        f"{sc_line}\ncreated_at: {created_at}\n---"
-    )
+    launch_editor(str(path))
 
-    with tempfile.NamedTemporaryFile(
-        suffix=".tmp", mode="w+", delete=False, encoding="utf-8"
-    ) as tf:
-        tf.write(template)
-        temp_path = tf.name
+    if not path.exists():
+        # The editor (or user) removed the file → drop it from the cache too.
+        get_db().delete_by_uid(row.uid)
+        if not quiet:
+            console.print(f"[red]Entry [{row.idx}] file removed.[/red]")
+        return
 
-    try:
-        launch_editor(temp_path)
-        with open(temp_path) as f:
-            new_data = f.read()
-
-        parts = re.split(r"\n---+\s*\n", new_data)
-        while parts and not parts[-1].strip():
-            parts.pop()
-
-        footer_at = first_footer_index(parts)
-        if footer_at is not None:
-            new_content = "\n---\n".join(parts[:footer_at]).strip()
-            meta_section = last_footer_segment(parts) or ""
-            new_tags, new_shortcut, new_created_at = tags, shortcut, created_at
-            # If the footer is present, pick up the title from it; an empty
-            # value means "clear" (same contract as shortcut:). If the user
-            # deletes the footer entirely the no-footer branch preserves it.
-            new_title: str | None = row.title
-            footer_has_title_line = False
-            for line in meta_section.splitlines():
-                if line.startswith("title:"):
-                    footer_has_title_line = True
-                    val = line.removeprefix("title:").strip()
-                    # Empty value clears the title; non-empty goes through the
-                    # newline guard only (an empty value here means "clear").
-                    if not val:
-                        new_title = None
-                    elif "\n" in val:
-                        exit_error("Title must be a single line.")
-                    else:
-                        new_title = val
-                elif line.startswith("tags:"):
-                    new_tags = line.removeprefix("tags:").strip()
-                elif line.startswith("shortcut:"):
-                    val = line.removeprefix("shortcut:").strip()
-                    new_shortcut = val if val else None
-                elif line.startswith("created_at:"):
-                    new_created_at = line.removeprefix("created_at:").strip()
-            # If the footer existed but had no title: line at all (hand-edited
-            # footer without the title key), preserve the existing title.
-            if not footer_has_title_line:
-                new_title = row.title
-            new_shortcut = _validate_shortcut(new_shortcut)
-
-            try:
-                update_memo_full(
-                    memo_id,
-                    new_content,
-                    new_tags,
-                    new_shortcut,
-                    new_created_at,
-                    title=new_title,
-                )
-            except _IntegrityErrors:
-                exit_error(f"Shortcut {new_shortcut!r} is already in use.")
-            if not quiet:
-                console.print(f"[green]Entry [{idx}] updated.[/green]")
-        else:
-            # No footer detected: content-only update; all metadata preserved.
-            new_content = "\n---\n".join(parts).strip() if parts else new_data.strip()
-            update_memo_full(memo_id, new_content, tags, shortcut, created_at, title=row.title)
-            if not quiet:
-                console.print(
-                    "[yellow]No metadata footer found; "
-                    "content updated, metadata preserved.[/yellow]"
-                )
-    finally:
-        Path(temp_path).unlink(missing_ok=True)
+    entry = read_entry(path)
+    if not (entry.content or "").strip():
+        exit_error("Entry body is empty. Use `koda remove` to delete an entry.", style="yellow")
+    # Identity is stable across edits; restore any machine field the user cleared.
+    entry.uid = row.uid
+    if not entry.created_at:
+        entry.created_at = row.created_at
+    if entry.idx is None:
+        entry.idx = row.idx
+    entry.modified_at = _now()  # an edit is a review → bump modified, re-bless
+    write_entry(get_entries_dir(), entry, path=path)
+    sync_path(get_db(), get_entries_dir(), path, blessed=True)
+    if not quiet:
+        console.print(f"[green]Entry [{row.idx}] updated.[/green]")
 
 
 def _emit_list_json(
@@ -761,32 +744,37 @@ def tag(
     idx_list = parse_indices(indices)
     add_list = parse_tag_args(tags)
     remove_list = parse_tag_args(untag)
+    entries_dir = get_entries_dir()
+    now = _now()
 
     updated = 0
     added_count = 0
     removed_count = 0
-    with get_db().connection() as conn:
-        for idx in idx_list:
-            row = conn.execute("SELECT id, tags FROM memos WHERE idx = ?", (idx,)).fetchone()
-            if row is None:
-                console.print(f"[yellow]No entry at index {idx}, skipping.[/yellow]")
+    for idx in idx_list:
+        row = get_db().get_memo_by_idx(idx)
+        if row is None:
+            console.print(f"[yellow]No entry at index {idx}, skipping.[/yellow]")
+            continue
+        current = [t for t in (row.tags or "").split(TAG_SEPARATOR) if t.strip()]
+        removed = [t for t in current if t in remove_list]
+        kept = [t for t in current if t not in remove_list]
+        added = [t for t in add_list if t not in kept]
+        new_tags = kept + added
+        if new_tags == current:
+            continue
+        if not dry_run:
+            path = _entry_file(row)
+            if path is None or not path.exists():
+                console.print(f"[yellow]No file for index {idx}, skipping.[/yellow]")
                 continue
-            row_id, current_tags = row
-            current = [t for t in (current_tags or "").split(TAG_SEPARATOR) if t.strip()]
-            removed = [t for t in current if t in remove_list]
-            kept = [t for t in current if t not in remove_list]
-            added = [t for t in add_list if t not in kept]
-            new_tags = kept + added
-            if new_tags == current:
-                continue
-            if not dry_run:
-                conn.execute(
-                    "UPDATE memos SET tags = ? WHERE id = ?",
-                    (TAG_SEPARATOR.join(new_tags), row_id),
-                )
-            updated += 1
-            added_count += len(added)
-            removed_count += len(removed)
+            entry = read_entry(path)
+            entry.tags = TAG_SEPARATOR.join(new_tags)
+            entry.modified_at = now
+            write_entry(entries_dir, entry, path=path)
+            sync_path(get_db(), entries_dir, path, blessed=True)
+        updated += 1
+        added_count += len(added)
+        removed_count += len(removed)
 
     if quiet:
         return

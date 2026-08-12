@@ -5,7 +5,6 @@ from pathlib import Path
 import pytest
 import typer
 
-import koda.runtime as runtime
 from koda.commands import memo
 
 
@@ -22,9 +21,8 @@ class FakeStdin:
 
 
 @pytest.fixture
-def wired_db(db, monkeypatch):
-    """Point the lazy DB cache at a fresh temp database."""
-    monkeypatch.setattr(runtime, "_db", db)
+def wired_db(db):
+    """The vault-backed cache (entries are created through the add path)."""
     return db
 
 

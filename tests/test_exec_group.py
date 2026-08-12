@@ -6,56 +6,53 @@ Like ``test_exec.py`` these run the CLI as a real subprocess, since exec ends in
 write to files under tmp so order and execution are observable.
 """
 
+import os
 import subprocess
 import sys
+
+from _helpers import build_vault
 
 from koda.db import MemoDatabase
 
 ENV_KEYS = ("PATH", "HOME")
 
 
-def _base_env(tmp_path, db_path):
-    import os
-
+def _base_env(tmp_path, vault):
     env = {k: os.environ[k] for k in ENV_KEYS if k in os.environ}
-    env["KODA_DB_PATH"] = str(db_path)
+    env["KODA_VAULT_PATH"] = str(vault)
     env["KODA_DB_PATH_OVERRIDE"] = "1"
     env["KODA_CONFIG_PATH"] = str(tmp_path / "nonexistent.toml")
     return env
 
 
-def _seed(db_path, entries):
-    """entries: list of (idx, shortcut, content). uid is derived from idx."""
-    seed = MemoDatabase(backend="local", path=db_path)
-    seed.init_db()
-    for idx, shortcut, content in entries:
-        seed.add_memo(
-            uid=f"uid{idx:05d}",
-            idx=idx,
-            shortcut=shortcut,
-            content=content,
-            tags="",
-            created_at="2026-01-01 00:00:00",
-            modified_at="2026-01-01 00:00:00",
-        )
-    return seed
+def _seed(vault, entries):
+    """entries: list of (idx, shortcut, content). uid is derived from idx.
+
+    ``vault`` is a directory; the .md files + cache are built inside it.
+    """
+    specs = [
+        {"content": content, "idx": idx, "shortcut": shortcut, "uid": f"uid{idx:05d}"}
+        for idx, shortcut, content in entries
+    ]
+    return build_vault(vault, specs)
 
 
-def _mark_remote(db_path, *uids):
-    seed = MemoDatabase(backend="local", path=db_path)
-    with seed.connection() as conn:
+def _mark_remote(vault, *uids):
+    db = MemoDatabase(path=vault / ".koda" / "cache.db")
+    with db.connection() as conn:
         for uid in uids:
             conn.execute("UPDATE memos SET source = 'remote' WHERE uid = ?", (uid,))
 
 
-def _run(tmp_path, db_path, *args, input=None):
+def _run(tmp_path, vault, *args, input=None):
     return subprocess.run(
         [sys.executable, "-c", "from koda.main import app; app()", "x", *args],
         capture_output=True,
         text=True,
         stdin=subprocess.DEVNULL if input is None else None,
         input=input,
-        env=_base_env(tmp_path, db_path),
+        env=_base_env(tmp_path, vault),
+        timeout=30,
     )
 
 
@@ -310,6 +307,7 @@ def test_remote_group_bypassed_when_confirm_disabled(tmp_path):
         text=True,
         stdin=subprocess.DEVNULL,
         env=env,
+        timeout=30,
     )
     assert result.returncode == 0, result.stderr
     assert out.read_text().split() == ["A", "B"]

@@ -1,12 +1,15 @@
-"""Tests for title CLI: add --title, edit footer, show display, query matching (#141)."""
+"""Tests for title CLI: add --title, edit via .md, show/list display, query (#141)."""
 
 import json
+from pathlib import Path
 
 import pytest
 import typer
+from _helpers import put_entry
 
-import koda.runtime as runtime
+from koda import md_store
 from koda.commands import memo
+from koda.runtime import get_entries_dir
 
 
 class FakeStdin:
@@ -22,9 +25,7 @@ class FakeStdin:
 
 
 @pytest.fixture
-def wired_db(db, monkeypatch):
-    """Point the lazy DB cache at a fresh temp database."""
-    monkeypatch.setattr(runtime, "_db", db)
+def wired_db(db):
     return db
 
 
@@ -82,7 +83,6 @@ def test_add_empty_title_rejected(wired_db, monkeypatch, capsys):
     with pytest.raises(typer.Exit):
         memo._add_impl(text=["body"], title="")
     assert "Title cannot be empty" in capsys.readouterr().err
-    # Nothing saved.
     assert wired_db.get_latest_entry() is None
 
 
@@ -101,111 +101,74 @@ def test_add_success_message_includes_title(wired_db, monkeypatch, capsys):
     assert "title: My Label" in out
 
 
-# ── edit footer title line ────────────────────────────────────────────────────
+def test_add_with_description_persists(wired_db, monkeypatch):
+    monkeypatch.setattr("sys.stdin", FakeStdin(tty=True))
+    memo._add_impl(text=["deploy body"], description="one-line summary")
+    row = wired_db.get_latest_entry()
+    assert row.description == "one-line summary"
+
+
+# ── edit the .md frontmatter title ────────────────────────────────────────────
 
 
 def _seed(db, content="body", title=None, shortcut=None):
-    db.add_memo(
-        "uid0001",
-        0,
-        shortcut,
-        content,
-        "work",
-        "2026-01-01 00:00:00",
-        "2026-01-01 00:00:00",
-        title=title,
-    )
-    return db.get_memo_by_idx(0)
+    return put_entry(content, idx=0, shortcut=shortcut, tags="work", title=title, uid="uid00010000")
 
 
-def test_edit_footer_sets_title(wired_db, monkeypatch):
+def test_edit_sets_title(wired_db, monkeypatch):
     _seed(wired_db)
 
     def fake_editor(path):
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(
-                "body\n\n---\n# Metadata\ntitle: New Title\ntags: work\n"
-                "shortcut: \ncreated_at: 2026-01-01 00:00:00\n---"
-            )
+        entry = md_store.read_entry(Path(path))
+        entry.title = "New Title"
+        md_store.write_entry(get_entries_dir(), entry, path=Path(path))
 
     monkeypatch.setattr(memo, "launch_editor", fake_editor)
     memo.edit("0", quiet=True)
     assert wired_db.get_memo_by_idx(0).title == "New Title"
 
 
-def test_edit_footer_clears_title_on_empty_value(wired_db, monkeypatch):
+def test_edit_clears_title(wired_db, monkeypatch):
     _seed(wired_db, title="Old Title")
 
     def fake_editor(path):
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(
-                "body\n\n---\n# Metadata\ntitle: \ntags: work\n"
-                "shortcut: \ncreated_at: 2026-01-01 00:00:00\n---"
-            )
+        entry = md_store.read_entry(Path(path))
+        entry.title = None
+        md_store.write_entry(get_entries_dir(), entry, path=Path(path))
 
     monkeypatch.setattr(memo, "launch_editor", fake_editor)
     memo.edit("0", quiet=True)
     assert wired_db.get_memo_by_idx(0).title is None
 
 
-def test_edit_footer_changes_title(wired_db, monkeypatch):
+def test_edit_changes_title(wired_db, monkeypatch):
     _seed(wired_db, title="Old Title")
 
     def fake_editor(path):
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(
-                "body\n\n---\n# Metadata\ntitle: Updated Title\ntags: work\n"
-                "shortcut: \ncreated_at: 2026-01-01 00:00:00\n---"
-            )
+        entry = md_store.read_entry(Path(path))
+        entry.title = "Updated Title"
+        md_store.write_entry(get_entries_dir(), entry, path=Path(path))
 
     monkeypatch.setattr(memo, "launch_editor", fake_editor)
     memo.edit("0", quiet=True)
     assert wired_db.get_memo_by_idx(0).title == "Updated Title"
 
 
-def test_edit_delete_footer_preserves_title(wired_db, monkeypatch):
-    """Deleting the whole footer must leave the title unchanged."""
-    _seed(wired_db, title="Keep Me")
+def test_edit_marks_source_local(wired_db, monkeypatch):
+    """Reviewing a remote entry via edit trusts it (source -> local)."""
+    put_entry("remote body", idx=0, uid="rem00010000", source="remote")
+    assert wired_db.get_memo_by_idx(0).source == "remote"
 
     def fake_editor(path):
-        with open(path, "w", encoding="utf-8") as f:
-            f.write("body without footer")
+        entry = md_store.read_entry(Path(path))
+        entry.content = "reviewed body"
+        md_store.write_entry(get_entries_dir(), entry, path=Path(path))
 
     monkeypatch.setattr(memo, "launch_editor", fake_editor)
     memo.edit("0", quiet=True)
-    assert wired_db.get_memo_by_idx(0).title == "Keep Me"
-
-
-def test_edit_footer_without_title_key_preserves_title(wired_db, monkeypatch):
-    """A hand-trimmed footer that omits the title: line must not wipe the title."""
-    _seed(wired_db, title="Keep Me Too")
-
-    def fake_editor(path):
-        # Write a footer that has no title: line at all.
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(
-                "body\n\n---\n# Metadata\ntags: work\n"
-                "shortcut: \ncreated_at: 2026-01-01 00:00:00\n---"
-            )
-
-    monkeypatch.setattr(memo, "launch_editor", fake_editor)
-    memo.edit("0", quiet=True)
-    assert wired_db.get_memo_by_idx(0).title == "Keep Me Too"
-
-
-# ── looks_like_koda_footer: title: first line ─────────────────────────────────
-
-
-def test_looks_like_koda_footer_accepts_title_prefix():
-    from koda.cmd_helpers.metadata import looks_like_koda_footer
-
-    assert looks_like_koda_footer("title: My Title\ntags: work\n")
-
-
-def test_looks_like_koda_footer_still_accepts_tags_prefix():
-    from koda.cmd_helpers.metadata import looks_like_koda_footer
-
-    assert looks_like_koda_footer("tags: work\nshortcut: foo\n")
+    row = wired_db.get_memo_by_idx(0)
+    assert row.content == "reviewed body"
+    assert row.source == "local"
 
 
 # ── query matches title ──────────────────────────────────────────────────────
@@ -213,26 +176,8 @@ def test_looks_like_koda_footer_still_accepts_tags_prefix():
 
 def _seed_two(db):
     """Insert two entries: one with a title hit, one with a body hit."""
-    db.add_memo(
-        "uid0001",
-        0,
-        None,
-        "unrelated body",
-        "work",
-        "2026-01-01 00:00:00",
-        "2026-01-01 00:00:00",
-        title="Deploy prod",
-    )
-    db.add_memo(
-        "uid0002",
-        1,
-        None,
-        "docker compose up",
-        "",
-        "2026-01-01 00:00:00",
-        "2026-01-01 00:00:00",
-        title=None,
-    )
+    put_entry("unrelated body", idx=0, tags="work", title="Deploy prod", uid="uid00010000")
+    put_entry("docker compose up", idx=1, uid="uid00020000")
 
 
 def test_query_matches_title_only_hit(wired_db):
@@ -240,28 +185,25 @@ def test_query_matches_title_only_hit(wired_db):
     # "Deploy" only appears in the title of entry 0, not in its body.
     rows = wired_db.get_memos(query="Deploy")
     assert len(rows) == 1
-    assert rows[0].uid == "uid0001"
+    assert rows[0].uid == "uid00010000"
 
 
 def test_query_matches_body_hit(wired_db):
     _seed_two(wired_db)
     rows = wired_db.get_memos(query="docker")
     assert len(rows) == 1
-    assert rows[0].uid == "uid0002"
+    assert rows[0].uid == "uid00020000"
 
 
-def test_list_with_query_shows_title_hit(wired_db, monkeypatch, capsys):
+def test_list_with_query_shows_title_hit(wired_db, capsys):
     _seed_two(wired_db)
     memo._list_memos_impl(query="Deploy")
     out = capsys.readouterr().out
-    # In title display mode (default), the content cell shows the title "Deploy prod"
-    # for the matched entry (uid0001 has title="Deploy prod", body="unrelated body").
     assert "Deploy prod" in out
 
 
-def test_remove_batch_query_matches_title(wired_db, monkeypatch, capsys):
+def test_remove_batch_query_matches_title(wired_db, capsys):
     _seed_two(wired_db)
-    # Force delete without prompt.
     memo.rm(indices=None, tag=None, query="Deploy", all_entries=False, force=True)
     assert wired_db.get_memo_by_idx(0) is None
     # Body-match entry survives.
@@ -279,7 +221,7 @@ def test_copy_preserves_title(wired_db):
     assert copied.title == "Original Title"
 
 
-# ── show --json includes title ────────────────────────────────────────────────
+# ── show/list --json includes title ───────────────────────────────────────────
 
 
 def test_show_json_includes_title(wired_db, capsys):

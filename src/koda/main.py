@@ -58,7 +58,8 @@ class KodaGroup(TyperGroup):
 
 app = typer.Typer(
     help=(
-        "Koda — memos and terminal snippets in SQLite. "
+        "Koda — memos and terminal snippets stored as plain Markdown files "
+        "(Obsidian / editor / AI friendly). "
         "Run with no subcommand to print the latest entry body (same as `koda raw`).\n\n"
         "One-letter aliases:\n"
         "a=add c=copy d=remove e=edit g=config h=shift k=compact\n"
@@ -110,7 +111,7 @@ def main(
 # every subcommand on ``app``. These imports must follow ``app`` (and ALIASES /
 # RESERVED_SHORTCUTS, which the command modules import from here).
 from .commands import exec as _exec  # noqa: E402,F401
-from .commands import git, index, memo  # noqa: E402,F401
+from .commands import git, index, manage, memo  # noqa: E402,F401
 from .commands import update as _update  # noqa: E402,F401
 
 if __name__ == "__main__":

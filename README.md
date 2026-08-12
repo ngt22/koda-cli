@@ -4,7 +4,7 @@
 [![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue)](https://github.com/ngt22/koda-cli/blob/main/pyproject.toml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](https://github.com/ngt22/koda-cli/blob/main/LICENSE)
 
-A **text store** for the terminal. Save any text — commands, paths, templates, notes — to SQLite and recall it instantly by index, shortcut, or fuzzy search. Saved entries can be executed as shell commands, making koda a **terminal launcher**. Sync via a private Git repository to share the same store across machines, giving you a **cross-machine clipboard** that works from any terminal. Built with Python, Typer, and Rich.
+A **text store** for the terminal. Save any text — commands, paths, templates, notes — to **plain Markdown files** and recall it instantly by index, shortcut, or fuzzy search. Every entry is a human- and AI-readable `.md` you can open in any editor or **Obsidian**. Saved entries can be executed as shell commands, making koda a **terminal launcher**. Sync via a private Git repository — plain `git` on the `.md` files, readable and editable on GitHub — to share the same store across machines, giving you a **cross-machine clipboard** that works from any terminal. Built with Python, Typer, and Rich.
 
 ## Contents
 
@@ -17,9 +17,10 @@ A **text store** for the terminal. Save any text — commands, paths, templates,
 - [Uninstall](#uninstall)
 - [Command reference](#command-reference)
 - [Recommended aliases](#recommended-aliases)
+- [Markdown file format](#markdown-file-format)
+- [Obsidian and external editing](#obsidian-and-external-editing)
 - [Configuration](#configuration)
 - [Environment variables](#environment-variables)
-- [Turso (remote database)](#turso-remote-database)
 - [Git sync](#git-sync-multi-machine-sharing-via-github)
 - [Example uses](#example-uses)
 - [Security model](#security-model)
@@ -30,7 +31,8 @@ A **text store** for the terminal. Save any text — commands, paths, templates,
 
 - **One store for text *and* commands.** Snippet managers store commands; note tools store text. koda does both, then lets you `exec` any entry as a shell command — with `${KEY}` / `$1` variable substitution at call time.
 - **Recall is instant and scriptable.** Reach any entry by numeric index, a memorable shortcut, or fuzzy `pick` (fzf). `raw` emits body-only text for pipes and `$(...)`, and `--json` feeds `jq`.
-- **Your store follows you.** A private Git repo syncs the same entries to every machine — a cross-machine clipboard for the terminal.
+- **Your data is just Markdown.** Every entry is a plain `.md` file (YAML frontmatter + raw body) under `~/.koda-cli/entries/`. Open the folder in Obsidian, edit a file in any editor, or let an AI agent read and write it — koda picks up the changes on the next command. No database to export from; nothing locked in.
+- **Your store follows you.** A private Git repo syncs the same `.md` files to every machine — a cross-machine clipboard for the terminal. Sync is ordinary `git` on files, so the entries are readable and editable straight from GitHub.
 
 **Who it's for:** terminal-native developers, SREs, and DevOps folks who retype the same commands, paths, and templates across hosts.
 
@@ -46,7 +48,7 @@ koda sits between a snippet manager and a note tool: it keeps arbitrary text the
 | Variable substitution | `-V` — `${KEY}` / `$1` |
 | Shortcut & index recall | numeric `idx` or `-s` shortcut |
 | Cross-machine sync | `push` / `pull` via your own Git repo |
-| Storage | local SQLite (or Turso remote) |
+| Storage | Plain Markdown files (Obsidian / editor / AI friendly) |
 | Shell-friendly output | `raw`, `--json` |
 
 ## Features
@@ -67,10 +69,11 @@ koda sits between a snippet manager and a note tool: it keeps arbitrary text the
 
 **Other**
 
-- **Cross-machine sync**: Push and pull via a private Git repository — the same store is available from every terminal, on every machine.
+- **Markdown-native storage**: Each entry is a plain `.md` file (`~/.koda-cli/entries/<slug>.md`) with YAML frontmatter and a verbatim body — editable in Obsidian, any editor, or by an AI agent. SQLite is only a hidden, disposable cache (`~/.koda-cli/.koda/cache.db`), rebuilt from the files.
+- **Cross-machine sync**: The vault is itself a git repo; `push`/`pull` sync the `.md` entries via a private repository — the same store on every machine.
 - **Display index**: Stable `uid` (first 16 hex chars of SHA1 over content + creation timestamp) plus user-controlled `idx`. Reorder with `move`/`swap`; close gaps with `compact`.
 - **uid collision caveat**: The `uid` is derived from content + creation time (second granularity), so two entries created in the same second with identical content share a `uid` and merge into one entry during Git sync. Avoid creating identical entries within the same second if you rely on sync.
-- **XDG-friendly**: Data under `~/.local/share/koda/`, config under `~/.config/koda/`.
+- **Editor-friendly**: Data under `~/.koda-cli/` (open it in Obsidian), config under `~/.config/koda/`.
 - **Configurable defaults**: Persist preferences in `~/.config/koda/config.toml`.
 
 ## In action
@@ -116,17 +119,15 @@ Grouped the same way as `koda --help`.
 
 | Command | Alias | Description |
 |---|---|---|
-| [`push`](#push-and-pull) | — | Export DB to Git sync repo and push |
-| [`pull`](#push-and-pull) | — | Pull Git sync repo and merge into local DB |
+| [`push`](#push-and-pull) | — | Commit & push the vault's `.md` entries |
+| [`pull`](#push-and-pull) | — | Pull `.md` entries and reconcile the cache |
 
 **Data**
 
 | Command | Alias | Description |
 |---|---|---|
-| `export` | — | Write all entries as JSON Lines to stdout or a file |
-| `import` | — | Merge a JSONL file into the local database |
-| `diff` | — | Show a uid-level diff against the remote payload |
-| `backup` | — | Write a single-file SQLite snapshot (`VACUUM INTO`) |
+| [`migrate`](#migrating-from-koda-1x) | — | One-time import of a legacy `koda.db` → `.md` files |
+| [`reindex`](#reindex) | — | Rebuild the cache from the `.md` files |
 
 **Index**
 
@@ -159,20 +160,14 @@ Single-letter aliases are reserved and cannot be used as entry shortcuts.
 
 **Requirements:** Python 3.10+ on Linux or macOS. `fzf` is optional and only needed for the interactive `pick` command.
 
+koda is not on PyPI — install it straight from the Git repository, pinned to a release tag:
+
 ```bash
 # uv (recommended)
-uv tool install "koda-cli @ git+https://github.com/ngt22/koda-cli.git"
+uv tool install "git+https://github.com/ngt22/koda-cli.git@v0.5.0"
 
 # pipx
-pipx install "git+https://github.com/ngt22/koda-cli.git"
-```
-
-Turso remote backend (optional):
-
-```bash
-uv tool install "koda-cli[turso] @ git+https://github.com/ngt22/koda-cli.git"
-# or
-pipx install "git+https://github.com/ngt22/koda-cli.git" --pip-args ".[turso]"
+pipx install "git+https://github.com/ngt22/koda-cli.git@v0.5.0"
 ```
 
 ## Update
@@ -189,6 +184,8 @@ uv tool upgrade koda-cli
 pipx upgrade koda-cli
 ```
 
+Already on koda 1.x? See [Migrating from koda 1.x](#migrating-from-koda-1x) to import your old SQLite database into the new Markdown vault.
+
 ---
 
 ## Uninstall
@@ -201,7 +198,7 @@ uv tool uninstall koda-cli
 pipx uninstall koda-cli
 ```
 
-Data (`~/.local/share/koda/`) and config (`~/.config/koda/`) are not removed by the tool manager. Delete them manually if you want a full cleanup.
+Data (`~/.koda-cli/`) and config (`~/.config/koda/`) are not removed by the tool manager. Delete them manually if you want a full cleanup.
 
 ## Command reference
 
@@ -301,8 +298,8 @@ curl http://$(kd r web-ip):8080/healthz
 **Workflow example — capture a transient value once, reuse in requests:**
 
 > **Security note**: Do not store passwords, API keys, or tokens.
-> All entries are saved in plaintext SQLite, and Git sync will expose them
-> in plaintext in the sync repository. Use this pattern for non-sensitive
+> All entries are saved as plaintext Markdown files, and Git sync will expose
+> them in plaintext in the sync repository. Use this pattern for non-sensitive
 > transient values only (container IPs, port numbers, generated paths, etc.).
 
 ```bash
@@ -522,26 +519,28 @@ values `say "hi"` and `a\b`.
 
 ### Edit
 
-Open an entry in `$EDITOR`. The footer contains editable metadata (title, tags, shortcut).
+Open the entry's **Markdown file** directly in `$EDITOR`. You edit the real `.md` — the YAML frontmatter (`title`, `shortcut`, `tags`, `description`, …) at the top and the body below it — so every field is right there in one file. There is no separate metadata footer template.
 
 ```bash
 koda e web-srv        # by shortcut
 koda e 5              # by index
+koda e                # latest entry
 ```
 
-The metadata footer template:
+The file looks like this (see [Markdown file format](#markdown-file-format) for the full spec):
 
-```
+```markdown
 ---
-# Metadata
 title: My Deploy Script
-tags: docker,work
 shortcut: dc
-created_at: 2026-01-01 00:00:00
+tags:
+- docker
+- work
 ---
+kubectl apply -f deploy/ && kubectl rollout status deploy/api
 ```
 
-Edit the `title:` value to change it; leave the value blank to clear the title. If the entire footer is deleted, the existing title is preserved along with the other metadata.
+Change a frontmatter value to update it; delete a human key (or leave it empty) to clear that field. The body is stored verbatim. Reviewing an entry with `edit` also marks it **trusted** (`source='local'`), clearing any remote-edit warning on `koda x` — see [Obsidian and external editing](#obsidian-and-external-editing).
 
 ---
 
@@ -726,6 +725,72 @@ Run `alias` in your shell to check for conflicts before adding these.
 
 ---
 
+## Markdown file format
+
+Each entry is one plain Markdown file at `~/.koda-cli/entries/<slug>.md`: a YAML frontmatter block followed by the raw body. Only top-level files in `entries/` are scanned — subfolders aren't recursed into, so organize with tags rather than filing entries into Obsidian subfolders.
+
+```markdown
+---
+title: Restart the API deployment
+shortcut: k8s-restart
+tags:
+- k8s
+- prod
+description: Rollout restart with a service placeholder
+created: 2026-07-04 10:30:15
+updated: 2026-07-04 10:30:15
+uid: a1b2c3d4e5f6a7b8
+idx: 7
+---
+kubectl rollout restart deployment/${svc} -n production
+```
+
+- **Frontmatter keys** koda manages: `title`, `shortcut`, `tags`, `description` (human keys), and `created`, `updated`, `uid`, `idx` (machine keys). Every human key is **optional and omitted when empty**, so a bare entry may have almost no frontmatter.
+- **The body is stored verbatim.** Only surrounding whitespace is trimmed — no fencing, no escaping. `$1`, `\$(...)`, backticks, and even a `---` line inside the body all survive a round-trip (only the *first* `---…---` block is frontmatter).
+- **`uid` is the stable identity.** It is a content-derived hash that never changes and is the key used to merge across machines. The **filename is just a label** — a slug derived from the first available of title → shortcut → tags → description → first body line → datetime. Renaming a file is fine; identity comes from the `uid` in the frontmatter, not the name.
+- **Unknown frontmatter keys are preserved.** Add your own Obsidian properties (`type:`, `aliases:`, arbitrary fields) and koda round-trips them untouched.
+
+## Obsidian and external editing
+
+The vault at `~/.koda-cli` is an ordinary folder of Markdown files, so any editor works — but it pairs especially well with **Obsidian**: point an Obsidian vault at `~/.koda-cli` and browse, search, and edit entries as notes. The `.koda/` cache directory is hidden, so it stays out of your way.
+
+koda treats the `.md` files as the source of truth. When you edit an entry in Obsidian or any editor (or an AI agent writes one, or `git pull` brings changes in), koda **reconciles automatically on the next `koda` command** — no import step. New and changed files are picked up; deleted files drop out; a renamed file keeps its identity via `uid`.
+
+Because those edits happen outside koda, an externally-changed entry is marked **`source=remote`** (untrusted) and koda **prompts before `koda x` runs it**, so a silently rewritten command can't execute unattended. Reviewing the entry restores trust:
+
+```bash
+koda edit deploy    # opens the .md directly; reviewing it marks source=local
+koda x deploy       # no prompt once trusted
+```
+
+`koda edit` opens the entry's `.md` in `$EDITOR`, and the act of reviewing it clears the flag back to `local`. (This is the same trust model used for entries arriving via `koda pull`.)
+
+## Store management (`migrate`, `reindex`)
+
+### Migrating from koda 1.x
+
+koda 1.x stored entries in a SQLite database (`~/.local/share/koda/koda.db`). `migrate` reads that database once and writes one Markdown file per entry into the new vault, then builds the cache.
+
+```bash
+koda migrate                       # import ~/.local/share/koda/koda.db
+koda migrate --from /path/koda.db  # import a database elsewhere
+koda migrate -f                    # migrate even if the vault already has entries
+```
+
+After migrating, open `~/.koda-cli` in Obsidian or run `koda list` to verify.
+
+### Reindex
+
+The cache (`~/.koda-cli/.koda/cache.db`) is disposable and rebuilt from the `.md` files. If it ever looks stale, rebuild it explicitly:
+
+```bash
+koda reindex        # re-parse every .md and rebuild the cache
+```
+
+Trust state (`local`/`remote`) is preserved. The `.md` files are the source of truth, so this never loses data.
+
+---
+
 ## Configuration
 
 Koda reads `~/.config/koda/config.toml` (XDG: `$XDG_CONFIG_HOME/koda/config.toml`). All settings are optional — unset values fall back to built-in defaults.
@@ -743,19 +808,8 @@ desc = false      # sort direction
 columns = ["idx", "sc", "tags", "content"]   # idx is required; available: idx, uid, sc, tags, title, content, created_at
 display = "title" # content column mode: title | body | full | both
 
-[db]
-path = "~/.local/share/koda/koda.db"
-backend = "local"   # "local" or "turso"
-
-[turso]
-url = "libsql://YOUR_DB.turso.io"    # Turso database URL
-# token = "..."                       # ⚠ Omit here — use KODA_TURSO_TOKEN env var
-#                                     #   (config file may be committed to version control)
-
-[git]
-sync_path = "~/koda-sync"           # local clone of the sync repository
-payload_file = "koda-sync.jsonl"    # JSONL file inside sync_path
-sync_format = "jsonl"               # wire format (jsonl only)
+[vault]
+path = "~/.koda-cli"   # directory holding entries/*.md and the .koda/ cache; open this in Obsidian
 
 [exec]
 shell = "sh"      # shell used by exec — restricted to: sh, bash, zsh, fish
@@ -763,78 +817,26 @@ shell = "sh"      # shell used by exec — restricted to: sh, bash, zsh, fish
 
 Priority order: **CLI flags > environment variables > config file > built-in defaults**
 
-> **Security**: `exec.shell` is restricted to an allowlist (`sh`, `bash`, `zsh`, `fish`) that must resolve to an installed executable. This prevents a misconfigured or tampered config from accidentally redirecting `koda x` to an unexpected binary. The config file (`config.toml`) and database are created with `0600` permissions and their parent directories with `0700`, so a plaintext Turso token is not world-readable.
+> **Security**: `exec.shell` is restricted to an allowlist (`sh`, `bash`, `zsh`, `fish`) that must resolve to an installed executable. This prevents a tampered config from redirecting `koda x` to an arbitrary binary. The config file (`config.toml`) and the cache database are created with `0600` permissions and their parent directories with `0700`. The `vault.path` must resolve to a directory under `$HOME` (set `KODA_DB_PATH_OVERRIDE=1` to allow another location for CI/tests).
 
 ## Environment variables
 
 | Variable | Purpose |
 |---|---|
-| `KODA_DB_PATH` | Override database file path |
-| `KODA_DB_PATH_OVERRIDE` | Set to `1` to allow `KODA_DB_PATH` to point outside `~/.local/share/koda` — the explicit escape hatch for CI/tests |
+| `KODA_VAULT_PATH` | Override the vault directory (overrides `vault.path` in config) |
 | `KODA_DEFAULT_CMD` | Override `defaults.cmd` for this session |
 | `KODA_CONFIG_PATH` | Override config file path |
-| `KODA_TURSO_URL`        | Turso database URL (overrides `turso.url` in config) |
-| `KODA_TURSO_TOKEN`      | Turso auth token (overrides `turso.token` in config) |
-| `KODA_GIT_SYNC_PATH`    | Path to the local Git sync clone (overrides `git.sync_path`) |
-| `KODA_GIT_PAYLOAD_FILE` | JSONL file name inside the sync clone (overrides `git.payload_file`) |
-| `KODA_GIT_SYNC_FORMAT`  | Sync wire format — `jsonl` (overrides `git.sync_format`) |
 | `KODA_FZF_OPTS`         | Extra flags passed to `fzf` by `pick` (e.g. `--height 40% --layout reverse`) |
 | `EDITOR`                | Editor for `add`, `edit`, and `config edit` (default: `vim`) |
 
-Example: `KODA_DB_PATH=/tmp/ci.db KODA_DB_PATH_OVERRIDE=1 koda l` runs against a
-temporary database outside the data directory.
-
-## Turso (remote database)
-
-Koda supports [Turso](https://turso.tech) as a remote backend, letting you share entries across machines.
-
-### Setup
-
-1. Install the optional dependency:
-
-```bash
-pip install libsql-experimental
-# or with uv:
-uv tool install ".[turso]"
-```
-
-2. Create a Turso database and get your URL and token from the [Turso dashboard](https://app.turso.tech) or CLI:
-
-```bash
-turso db create koda
-turso db show koda --url
-turso db tokens create koda
-```
-
-3. Configure Koda — use environment variables to keep the token out of the config file:
-
-```bash
-export KODA_TURSO_URL="libsql://YOUR_DB.turso.io"
-export KODA_TURSO_TOKEN="YOUR_AUTH_TOKEN"
-koda config set db.backend turso
-```
-
-You can also write the URL to the config file, but **omit the token** and supply it via the env var:
-
-```bash
-koda config set db.backend turso
-koda config set turso.url "libsql://YOUR_DB.turso.io"
-# Do NOT run: koda config set turso.token "..."
-# The config file may be committed to version control — use KODA_TURSO_TOKEN instead.
-```
-
-### Switching between backends
-
-```bash
-koda config set db.backend turso   # use Turso
-koda config set db.backend local   # use local SQLite (default)
-```
-
-The local SQLite database (`db.path`) and the Turso database are independent — switching backends does not migrate data.
-
 ## Git sync (multi-machine sharing via GitHub)
 
-Koda supports syncing entries across machines using a Git repository (e.g. a private GitHub repo) as a transport. On push, Koda exports the local database as a JSON Lines file (`koda-sync.jsonl`) into a local clone, commits it, and pushes to the remote. On pull, it fetches the latest commit and merges entries into the local database by `uid` and `modified_at` — newer wins, no entry is deleted.
+The vault (`~/.koda-cli`) is **itself a git repository**, and the `entries/*.md` files are the synced artifact — so sync is just plain `git` on files, readable and editable straight from GitHub. There is no JSONL payload and no bespoke merge:
+
+```bash
+koda push   # git add/commit the entries, then push to the remote
+koda pull   # git pull --rebase, then reconcile the cache from the .md files
+```
 
 > **Deletions are not synced.** `pull` never deletes entries — removing an
 > entry on one machine does not remove it anywhere else. After a `pull`, a
@@ -843,46 +845,38 @@ Koda supports syncing entries across machines using a Git repository (e.g. a pri
 > a deliberate safe-merge choice: sync never loses data, at the cost of
 > deletions not propagating.
 
-This works independently of the Turso backend. You can use Git sync with the default local SQLite database.
+`push` runs `git pull --rebase` first (when an upstream exists) so the branch stays linear, then commits `entries/*.md` and pushes. `pull` rebases the latest commits in and reconciles the cache. The `.koda/` cache directory is **git-ignored automatically** — koda adds it to `.gitignore` on first push, so the disposable cache never ends up in the repo.
 
-> **Security note**: `koda-sync.jsonl` contains **all entries in plaintext**.
-> Any passwords, tokens, or secrets stored in Koda will be committed to the
-> sync repository in plaintext. Use a **private** repository and avoid storing
-> sensitive values in Koda when Git sync is enabled.
+Concurrent edits to the *same* entry surface as an **ordinary git file conflict** on that one `.md` — resolve it with your usual git workflow, then run any `koda` command to reconcile.
+
+> **Security note**: entries are stored as **plaintext `.md` files** committed to the repo.
+> Any passwords, tokens, or secrets stored in koda will be committed to the sync
+> repository in plaintext. Use a **private** repository and avoid storing sensitive
+> values in koda when Git sync is enabled.
 
 ### Setup
 
-**1. Create a sync repository on GitHub (private recommended):**
+koda initialises the vault as a git repo on first `push`; you only need to add a remote once.
 
 ```bash
-# Create the repo on GitHub, then clone it locally
-git clone git@github.com:YOUR_USERNAME/koda-sync.git ~/koda-sync
+# 1. Create a repo on GitHub (private recommended), then add it as the remote:
+git -C ~/.koda-cli remote add origin git@github.com:YOUR_USERNAME/koda-vault.git
+
+# 2. Push — koda commits entries/*.md and sets the upstream on the first push:
+koda push
 ```
 
-**2. Point Koda at the clone:**
-
-```bash
-koda config set git.sync_path ~/koda-sync
-```
-
-The `koda-sync` directory is the local clone root. Koda creates `koda-sync.jsonl` inside it automatically on first push.
-
-**3. Confirm the configuration:**
-
-```bash
-koda config get git.sync_path      # → ~/koda-sync
-koda config get git.payload_file   # → koda-sync.jsonl  (default)
-koda config get git.sync_format    # → jsonl            (default)
-```
+If no remote is configured, `koda push` commits locally and tells you how to add one.
 
 ### Push and pull
 
 ```bash
-koda push   # export DB → koda-sync.jsonl, commit, push to remote
-koda pull   # git pull the clone, merge koda-sync.jsonl into local DB
+koda push          # commit entries/*.md and push
+koda pull          # pull and reconcile
+koda pull --dry-run   # (or -n) show incoming changes without applying them
 ```
 
-`push` does a `git pull --rebase` before writing the payload so the branch stays linear. `pull` merges by `uid` — entries that already exist locally are updated only if the incoming `modified_at` is newer.
+koda resolves the remote automatically: it uses the current branch's upstream when set, otherwise it runs `git push -u <remote> <branch>` on the first push to create one (`origin` if present, else the first listed remote).
 
 The sync payload is uid-sorted, so concurrent edits to *different* entries
 usually merge cleanly at the Git level. If the **same** entry is edited on two
@@ -893,16 +887,16 @@ desired line(s), commit, and re-run the command.
 
 ### Remote trust boundary
 
-The sync remote is **outside your trust boundary**. Anyone who can write to it (a compromised account, a shared repo, a malicious collaborator) can change the body of any synced entry — including one bound to a shortcut you `exec`. To contain this:
+The sync remote is **outside your trust boundary**. Anyone who can write to it (a compromised account, a shared repo, a malicious collaborator) can change the body of any synced entry — including one bound to a shortcut you `exec`. koda contains this with the same trust model it uses for any external edit:
 
-- **Entries arriving via `pull` are marked `source=remote`.** `koda exec`/`koda x` **prompts for confirmation before running a `source=remote` entry**, so a silently rewritten `deploy` snippet cannot execute unattended. The recommended way to trust an entry is to **review it with `koda edit <ref>`**, which clears the flag back to `local` permanently. `koda x -f/--force` runs it once without prompting — prefer `edit` over habitually reaching for `-f`, since an `-f` baked into an alias or script silently disables the check. A [group entry](#execute-exec--run-a-saved-command) gates the same way: if the group or any expanded child is `source=remote`, `koda x` prompts once before running the whole group.
-- **Preview before you merge.** `koda pull --dry-run` shows the exact insert/update diff *without* touching the local database, so you can inspect incoming changes first.
-- **The `source` flag never crosses the wire.** It is local-only state and is not written to (or read from) `koda-sync.jsonl`, so a remote cannot label its own entries `local` to dodge the prompt.
+- **Entries changed by a `pull` are detected as external edits and marked `source=remote`.** `koda exec`/`koda x` **prompts for confirmation before running a `source=remote` entry**, so a silently rewritten `deploy` snippet cannot execute unattended. The recommended way to trust an entry is to **review it with `koda edit <ref>`**, which clears the flag back to `local` permanently. `koda x -f/--force` runs it once without prompting — prefer `edit` over habitually reaching for `-f`, since an `-f` baked into an alias or script silently disables the check. A [group entry](#execute-exec--run-a-saved-command) gates the same way: if the group or any expanded child is `source=remote`, `koda x` prompts once before running the whole group.
+- **Preview before you merge.** `koda pull --dry-run` fetches and shows the incoming file changes *without* applying them, so you can inspect them first.
+- **Trust state is local-only.** The `source` flag lives in the cache and is **never written into the `.md` files**, so a remote cannot label its own entries `local` to dodge the prompt.
 
 ```bash
 koda pull --dry-run     # (or -n) show what would change, write nothing
-koda pull               # merge; new/updated entries become source=remote
-koda x deploy           # prompts because 'deploy' came from the remote
+koda pull               # pull + reconcile; externally changed entries become source=remote
+koda x deploy           # prompts because 'deploy' was changed on the remote
 koda edit deploy        # review it → trusted (source=local), no more prompts
 koda x deploy -f        # run once without prompting (does NOT clear the flag)
 ```
@@ -915,49 +909,18 @@ koda x deploy -f        # run once without prompting (does NOT clear the flag)
 
 ### Setting up a second machine
 
-```bash
-# On the new machine: clone the sync repo
-git clone git@github.com:YOUR_USERNAME/koda-sync.git ~/koda-sync
-
-# Point Koda at it
-koda config set git.sync_path ~/koda-sync
-
-# Import the shared entries
-koda pull
-```
-
-### Specifying a different remote
-
-Koda resolves the remote automatically: it picks `origin` if available, otherwise the first listed remote. To use a different remote, set it as `origin` in the clone:
+The vault is a git repo, so just clone it to the default vault path and koda picks it up:
 
 ```bash
-git -C ~/koda-sync remote set-url origin git@github.com:YOUR_USERNAME/koda-sync.git
+# On the new machine: clone the vault repo to ~/.koda-cli
+git clone git@github.com:YOUR_USERNAME/koda-vault.git ~/.koda-cli
+
+# Build the cache from the .md files (or just run any koda command)
+koda reindex
+koda list
 ```
 
-Or add a named remote and set it as the tracking upstream for your branch:
-
-```bash
-git -C ~/koda-sync remote add work git@github.com:YOUR_ORG/koda-sync.git
-git -C ~/koda-sync branch --set-upstream-to=work/main main
-```
-
-When an upstream is set for the current branch, Koda uses it directly (`git pull --rebase` / `git push`). When no upstream is configured, Koda calls `git push -u <remote> <branch>` to set one automatically on the first push.
-
-### Configuration reference
-
-| Key | Default | Description |
-|---|---|---|
-| `git.sync_path` | *(empty)* | Path to the local clone of the sync repository |
-| `git.payload_file` | `koda-sync.jsonl` | JSONL file path, relative to `git.sync_path` |
-| `git.sync_format` | `jsonl` | Wire format — only `jsonl` is supported |
-
-Environment variable overrides:
-
-| Variable | Purpose |
-|---|---|
-| `KODA_GIT_SYNC_PATH` | Override `git.sync_path` |
-| `KODA_GIT_PAYLOAD_FILE` | Override `git.payload_file` |
-| `KODA_GIT_SYNC_FORMAT` | Override `git.sync_format` |
+To keep both machines in sync afterwards, `koda pull` before you start and `koda push` when you finish.
 
 ## Example uses
 
@@ -1010,23 +973,22 @@ koda runs shell commands and syncs data across machines, so it is worth being
 explicit about what it does and does not defend against.
 
 **Threat model.** koda assumes the local user account and the local filesystem
-are trusted, and that **anything reaching the database from outside — a Git
-sync remote, the `KODA_*` environment variables, a hand-edited
-`config.toml` — is not.** The hardening below targets that boundary.
+are trusted, and that **anything reaching an entry from outside — a Git sync
+remote, an externally edited `.md` file, the `KODA_*` environment variables, a
+hand-edited `config.toml` — is not.** The hardening below targets that boundary.
 
 | Area | Risk | Mitigation |
 |---|---|---|
-| `exec` shell | A misconfigured or tampered `exec.shell` could redirect `koda x` to an unexpected binary | `exec.shell` is restricted to an allowlist (`sh`, `bash`, `zsh`, `fish`) that must resolve to an installed executable |
-| Git sync poisoning | A writable remote could rewrite the body of an `exec` entry | `pull`-merged entries are marked `source=remote` and **`koda x` prompts before running them** (review with `koda edit` to trust; `exec.confirm_remote=false` opts out, at the cost of the check); `pull --dry-run` previews changes; the `source` flag is local-only and never synced. See [Remote trust boundary](#remote-trust-boundary) |
+| `exec` shell | A tampered `exec.shell` could redirect `koda x` to an arbitrary binary | `exec.shell` is restricted to an allowlist (`sh`, `bash`, `zsh`, `fish`) that must resolve to an absolute executable |
+| External-edit / sync poisoning | A writable remote (or an edit made outside koda) could rewrite the body of an `exec` entry | An entry whose body no longer matches koda's blessed hash is marked `source=remote` and **`koda x` prompts before running it** (review with `koda edit` to trust; `exec.confirm_remote=false` opts out, at the cost of the check); `pull --dry-run` previews changes; the `source` flag is local-only and never written to the `.md`. See [Remote trust boundary](#remote-trust-boundary) |
 | uid collision | The old 7-char (28-bit) `uid` was collidable (~16k entries) / preimage-attackable, enabling sync poisoning | `uid` is 16 hex chars (64-bit); legacy short uids still resolve via prefix match |
-| `git.payload_file` | A relative path like `.git/hooks/post-merge` could overwrite a git hook that then executes | The validator and `push` reject any path with `..` or a `.git` component, or an absolute path |
-| `db.path` | `KODA_DB_PATH=~/.ssh/authorized_keys` could create files at an attacker-chosen location | A local `db.path` is restricted to `~/.local/share/koda` / `$XDG_DATA_HOME/koda`; `KODA_DB_PATH_OVERRIDE=1` is the explicit escape hatch for CI/tests |
-| File permissions | World-readable secrets on disk | `config.toml` and the database are written `0600`, their parent dirs `0700` |
+| `vault.path` | `KODA_VAULT_PATH=~/.ssh` could point koda's file writes at an attacker-chosen location | `vault.path` must resolve to a directory under `$HOME`; `KODA_DB_PATH_OVERRIDE=1` is the explicit escape hatch for CI/tests |
+| File permissions | World-readable secrets on disk | `config.toml` and the cache database are written `0600`, their parent dirs `0700` |
 
-**Not in scope.** Entries are stored **in plaintext** — see the repeated note
-above: do not keep passwords, tokens, or other secrets in koda, and use a
-**private** repository for Git sync. koda also trusts the commands you choose
-to store and run; only `exec` entries you trust (or have reviewed).
+**Not in scope.** Entries are stored as **plaintext `.md` files** — see the
+repeated note above: do not keep passwords, tokens, or other secrets in koda, and
+use a **private** repository for Git sync. koda also trusts the commands you
+choose to store and run; only `exec` entries you trust (or have reviewed).
 
 ## Development
 

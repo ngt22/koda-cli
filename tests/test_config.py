@@ -96,77 +96,41 @@ class TestValidate:
         with pytest.raises(ValidationError):
             ConfigManager.validate("list.columns", [])
 
-    def test_backend_valid(self):
-        assert ConfigManager.validate("db.backend", "turso") == "turso"
-
-    def test_backend_invalid(self):
-        with pytest.raises(ValidationError):
-            ConfigManager.validate("db.backend", "mysql")
-
-    def test_payload_file_valid(self):
-        assert ConfigManager.validate("git.payload_file", "koda-sync.jsonl") == "koda-sync.jsonl"
-
-    @pytest.mark.parametrize(
-        "value",
-        [
-            "",
-            "   ",
-            "/abs/path.jsonl",
-            "../escape.jsonl",
-            ".git/hooks/post-merge",
-            ".git/config",
-            "sub/.git/hooks/post-merge",
-        ],
-    )
-    def test_payload_file_invalid(self, value):
-        with pytest.raises(ValidationError):
-            ConfigManager.validate("git.payload_file", value)
-
-    def test_sync_format_valid(self):
-        assert ConfigManager.validate("git.sync_format", "JSONL") == "JSONL"
-
-    def test_sync_format_invalid(self):
-        with pytest.raises(ValidationError):
-            ConfigManager.validate("git.sync_format", "yaml")
-
-    @pytest.mark.parametrize("key", ["turso.url", "turso.token", "git.sync_path"])
-    def test_no_validator_passthrough(self, key):
-        assert ConfigManager.validate(key, "anything") == "anything"
+    def test_no_validator_passthrough(self):
+        # exec.confirm_remote and list.desc are plain bools with no validator.
+        assert ConfigManager.validate("exec.confirm_remote", True) is True
 
     def test_unknown_key_passthrough(self):
         assert ConfigManager.validate("unknown.key", "x") == "x"
 
 
-class TestDbPath:
+class TestVaultPath:
     def test_default_path_valid(self):
-        from koda.config import DEFAULT_DB_PATH
+        from koda.config import DEFAULT_VAULT_DIR
 
-        assert ConfigManager.validate("db.path", str(DEFAULT_DB_PATH)) == str(DEFAULT_DB_PATH)
+        assert ConfigManager.validate("vault.path", str(DEFAULT_VAULT_DIR)) == str(
+            DEFAULT_VAULT_DIR
+        )
 
-    def test_inside_data_dir_valid(self):
-        from koda.config import DEFAULT_DB_DIR
+    def test_path_under_home_valid(self, monkeypatch):
+        from pathlib import Path
 
-        path = str(DEFAULT_DB_DIR / "sub" / "other.db")
-        assert ConfigManager.validate("db.path", path) == path
+        monkeypatch.delenv("KODA_DB_PATH_OVERRIDE", raising=False)
+        path = str(Path.home() / "notes" / "vault")
+        assert ConfigManager.validate("vault.path", path) == path
 
     @pytest.mark.parametrize(
         "path",
-        ["/home/victim/.ssh/authorized_keys", "/tmp/evil.db", "relative.db"],
+        ["/etc/koda", "/tmp/evil-vault"],
     )
-    def test_outside_data_dir_invalid(self, path, monkeypatch):
+    def test_outside_home_invalid(self, path, monkeypatch):
         monkeypatch.delenv("KODA_DB_PATH_OVERRIDE", raising=False)
         with pytest.raises(ValidationError):
-            ConfigManager.validate("db.path", path)
+            ConfigManager.validate("vault.path", path)
 
     def test_override_env_allows_arbitrary_path(self, monkeypatch):
         monkeypatch.setenv("KODA_DB_PATH_OVERRIDE", "1")
-        assert ConfigManager.validate("db.path", "/tmp/evil.db") == "/tmp/evil.db"
-
-    def test_xdg_data_home_root_valid(self, monkeypatch, tmp_path):
-        monkeypatch.delenv("KODA_DB_PATH_OVERRIDE", raising=False)
-        monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
-        path = str(tmp_path / "koda" / "koda.db")
-        assert ConfigManager.validate("db.path", path) == path
+        assert ConfigManager.validate("vault.path", "/tmp/evil-vault") == "/tmp/evil-vault"
 
 
 class TestExecShell:

@@ -1,273 +1,186 @@
-"""Git sync and payload I/O commands: push, pull, export, import."""
+"""Git sync commands: push, pull.
 
+The vault (``~/.koda-cli``) is itself a git repository and the ``entries/*.md``
+files are the synced artifact — so sync is just git on plain files. ``push``
+commits and pushes the entries; ``pull`` rebases and then reconciles the cache.
+No JSONL payload, no bespoke merge: concurrent edits to the same entry surface
+as ordinary git conflicts on that one file.
+"""
+
+import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 import typer
 
-from .. import git_sync
 from ..cli_utils import exit_error
 from ..main import app
-from ..runtime import console, get_config, get_db, init_db
+from ..reconcile import reconcile_all
+from ..runtime import console, get_db, get_entries_dir, get_vault, init_db
+
+# Kept out of sync: the local cache/trust ledger, and Obsidian's per-machine app
+# state (workspace, plugins) which would otherwise churn and conflict across
+# machines. Users who deliberately want to sync Obsidian config can remove the
+# line from their vault's .gitignore.
+_GITIGNORE_LINES = (".koda/", ".obsidian/")
 
 
-def _obtain_remote_payload(local_payload_path: Path | None) -> bytes:
-    """Return payload bytes from a local --file or, failing that, the Git clone."""
-    git_sync.require_jsonl_format(get_config())
-    if local_payload_path is not None:
-        if not local_payload_path.is_file():
-            exit_error(f"--file does not exist: {local_payload_path}")
-        return local_payload_path.read_bytes()
-    git_sync.require_git_cli()
-    sync_root = git_sync.resolve_sync_root(get_config())
-    repo = git_sync.GitSyncRepo(sync_root)
-    repo.ensure_worktree()
-    payload_path = git_sync.resolve_payload_path(get_config(), sync_root)
-    repo.pull_rebase_if_remote()
-    if not payload_path.is_file():
-        exit_error(f"Payload file missing after pull: {payload_path}")
-    return payload_path.read_bytes()
+def _require_git() -> None:
+    if shutil.which("git") is None:
+        exit_error("git is not installed or not on PATH.")
 
 
-def _preview(content: str, width: int = 50) -> str:
-    """First line of ``content``, collapsed and truncated for one-line display."""
-    first = (content or "").splitlines()[0] if content else ""
-    return first if len(first) <= width else first[: width - 1] + "…"
+def _git(vault: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["git", "-C", str(vault), *args], check=check, capture_output=True, text=True
+    )
 
 
-def _print_merge_plan(data: bytes) -> None:
-    """Show what a pull would insert/update without writing (`--dry-run`)."""
-    try:
-        rows = git_sync.GitSyncPayload.load(data)
-    except Exception as e:
-        exit_error(f"Invalid sync payload: {e}")
+def _is_repo(vault: Path) -> bool:
+    return (vault / ".git").exists()
 
-    plan = git_sync.MemoMerger(get_db()).plan(rows)
-    inserts = [p for p in plan if p["action"] == "insert"]
-    updates = [p for p in plan if p["action"] == "update"]
-    skips = [p for p in plan if p["action"] == "skip"]
 
-    if not (inserts or updates):
-        console.print("[green]Nothing to merge — local is up to date with the payload.[/green]")
-    for p in inserts:
+def _ensure_repo(vault: Path) -> None:
+    """Make the vault a git repo (first run) and keep the cache and Obsidian
+    app-state git-ignored."""
+    vault.mkdir(parents=True, exist_ok=True)
+    if not _is_repo(vault):
+        _git(vault, "init")
+    gitignore = vault / ".gitignore"
+    lines = gitignore.read_text(encoding="utf-8").splitlines() if gitignore.exists() else []
+    missing = [line for line in _GITIGNORE_LINES if line not in lines]
+    if missing:
+        gitignore.write_text("\n".join(lines + missing) + "\n", encoding="utf-8")
+
+
+def _has_remote(vault: Path) -> bool:
+    return bool(_git(vault, "remote", check=False).stdout.strip())
+
+
+def _current_branch(vault: Path) -> str:
+    out = _git(vault, "rev-parse", "--abbrev-ref", "HEAD", check=False).stdout.strip()
+    return out or "main"
+
+
+def _first_remote(vault: Path) -> str:
+    remotes = _git(vault, "remote", check=False).stdout.split()
+    return remotes[0] if remotes else "origin"
+
+
+def _has_upstream(vault: Path) -> bool:
+    return (
+        _git(
+            vault, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}", check=False
+        ).returncode
+        == 0
+    )
+
+
+def _git_or_exit(vault: Path, *args: str, hint: str = "") -> subprocess.CompletedProcess:
+    """Run a git command, exiting cleanly with git's own message (plus an optional
+    hint) instead of raising a raw traceback when it fails."""
+    result = _git(vault, *args, check=False)
+    if result.returncode != 0:
+        message = (result.stderr or result.stdout or "").strip()
+        suffix = f"\n\n{hint}" if hint else ""
+        exit_error(f"git {' '.join(args)} failed:\n{message}{suffix}")
+    return result
+
+
+_PUSH_HINT = (
+    "The remote has commits your vault does not. Run `koda pull` to merge them "
+    "first, or overwrite the remote with this vault via "
+    "`git -C ~/.koda-cli push --force origin <branch>` (discards the remote's history)."
+)
+_REBASE_HINT = (
+    "Resolve the conflicts in ~/.koda-cli, then `git -C ~/.koda-cli rebase --continue` "
+    "(or `git -C ~/.koda-cli rebase --abort` to back out)."
+)
+
+
+def _pull_rebase_if_remote(vault: Path) -> None:
+    if _has_remote(vault) and _has_upstream(vault):
+        _git_or_exit(vault, "pull", "--rebase", hint=_REBASE_HINT)
+
+
+def _push_if_remote(vault: Path) -> None:
+    if not _has_remote(vault):
         console.print(
-            f"[green]+ insert[/green] {p['uid'][:12]}  [{p['idx']}]  {_preview(p['content'])}"
+            "[yellow]No git remote configured — committed locally only.[/yellow]\n"
+            "[dim]Add one with `git -C ~/.koda-cli remote add origin <url>`, then push again.[/dim]"
         )
-    for p in updates:
-        console.print(
-            f"[yellow]~ update[/yellow] {p['uid'][:12]}  [{p['idx']}]  {_preview(p['content'])}"
+        return
+    if _has_upstream(vault):
+        _git_or_exit(vault, "push", hint=_PUSH_HINT)
+    else:
+        # First push: create the upstream branch (mirrors the old sync helper).
+        _git_or_exit(
+            vault, "push", "-u", _first_remote(vault), _current_branch(vault), hint=_PUSH_HINT
         )
-    console.print(
-        f"[dim]{len(inserts)} insert, {len(updates)} update, {len(skips)} skip "
-        f"— dry run, no changes written.[/dim]"
-    )
-
-
-def _merge_payload(data: bytes) -> None:
-    """Load a JSONL payload and merge it into the local DB, printing a summary."""
-    try:
-        rows = git_sync.GitSyncPayload.load(data)
-    except Exception as e:
-        exit_error(f"Invalid sync payload: {e}")
-
-    ins, upd, skp, dsc = git_sync.MemoMerger(get_db()).merge(rows)
-    tail = (
-        f", [yellow]{dsc}[/yellow] shortcut(s) dropped (conflicts with local shortcuts)"
-        if dsc
-        else ""
-    )
-    console.print(
-        f"merged memos: [cyan]{ins}[/cyan] inserted, [cyan]{upd}[/cyan] updated, "
-        f"[dim]{skp}[/dim] skipped (older, future-dated, or invalid entries){tail}."
-    )
 
 
 @app.command(rich_help_panel="Git sync")
-def push(
-    payload_file: Path | None = typer.Option(
-        None, "--file", help="Use this JSONL file instead of exporting the local database."
-    ),
-):
-    """Write memo export (JSON Lines, uid-sorted) into the Git clone, commit, and push.
-
-    Alias: `koda push`.
-    """
+def push():
+    """Commit the vault's Markdown entries and push to the git remote. Alias: `koda push`."""
     init_db()
-    git_sync.require_jsonl_format(get_config())
-    git_sync.require_git_cli()
-    sync_root = git_sync.resolve_sync_root(get_config())
-    repo = git_sync.GitSyncRepo(sync_root)
-    repo.ensure_worktree()
-    payload_path = git_sync.resolve_payload_path(get_config(), sync_root)
-    rel = payload_path.relative_to(sync_root).as_posix()
+    vault = get_vault()
+    _require_git()
+    _ensure_repo(vault)
+    _pull_rebase_if_remote(vault)
 
-    if payload_file is not None:
-        if not payload_file.is_file():
-            exit_error(f"--file does not exist: {payload_file}")
-        data = payload_file.read_bytes()
-        try:
-            _ = git_sync.GitSyncPayload.load(data)
-        except Exception as e:
-            exit_error(f"Invalid sync payload: {e}")
-    else:
-        data = git_sync.GitSyncPayload.dump(get_db())
-
-    repo.pull_rebase_if_remote()
-
-    git_sync.atomic_write_bytes(payload_path, data)
-    subprocess.run(["git", "-C", str(sync_root), "add", "-f", rel], check=True)
-    chk = subprocess.run(["git", "-C", str(sync_root), "diff", "--cached", "--quiet"])
-    if chk.returncode == 0:
-        console.print("[yellow]Payload unchanged — nothing to commit.[/yellow]")
-        repo.push_if_remote()
+    try:
+        _git(vault, "add", "-A")
+    except subprocess.CalledProcessError as e:
+        console.print("[red]git add failed. Resolve issues in the vault and retry.[/red]")
+        if e.stderr:
+            console.print(f"[dim]{e.stderr.strip()}[/dim]")
+        raise typer.Exit(code=1)
+    if _git(vault, "diff", "--cached", "--quiet", check=False).returncode == 0:
+        console.print("[yellow]No entry changes — nothing to commit.[/yellow]")
+        _push_if_remote(vault)
         console.print("[green]Push complete.[/green]")
         return
 
     try:
-        subprocess.run(
-            ["git", "-C", str(sync_root), "commit", "-m", "koda: sync memo payload"],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+        _git(vault, "commit", "-m", "koda: sync entries")
     except subprocess.CalledProcessError as e:
-        console.print(
-            "[red]git commit failed. Resolve working tree issues in the sync clone and retry.[/red]"
-        )
+        console.print("[red]git commit failed. Resolve issues in the vault and retry.[/red]")
         if e.stderr:
             console.print(f"[dim]{e.stderr.strip()}[/dim]")
         raise typer.Exit(code=1)
-    repo.push_if_remote()
-
-    console.print(f"[green]Synced payload to Git: {payload_path}[/green]")
+    _push_if_remote(vault)
+    console.print("[green]Push complete.[/green]")
 
 
 @app.command(rich_help_panel="Git sync")
 def pull(
-    local_payload_path: Path | None = typer.Option(
-        None, "--file", help="Import from this JSONL file (skip git pull in the clone)."
-    ),
     dry_run: bool = typer.Option(
-        False,
-        "--dry-run",
-        "-n",
-        help="Show the insert/update diff without modifying the local database.",
+        False, "--dry-run", "-n", help="Fetch and show incoming changes without applying them."
     ),
 ):
-    """Pull memo JSONL from the Git clone (--file skips git); merge into local DB.
+    """Pull Markdown entries from the git remote and reconcile the cache. Alias: `koda pull`.
 
-    Merge key is uid + modified_at. Merged entries are marked source=remote and
-    prompt before `koda x` runs them. Use --dry-run to preview the diff first.
-    Alias: `koda pull`.
+    Entries changed by the pull are detected as external edits and marked
+    source=remote, so `koda x` prompts before running them until you review with
+    `koda edit`.
     """
     init_db()
-    data = _obtain_remote_payload(local_payload_path)
+    vault = get_vault()
+    _require_git()
+    if not _is_repo(vault):
+        exit_error("Vault is not a git repository yet. Run `koda push` first.")
+    if not _has_remote(vault):
+        exit_error("No git remote configured for the vault.")
+
     if dry_run:
-        _print_merge_plan(data)
+        _git(vault, "fetch", check=False)
+        if not _has_upstream(vault):
+            console.print("[yellow]No upstream branch to compare against.[/yellow]")
+            return
+        diff = _git(vault, "diff", "--stat", "HEAD", "@{u}", check=False).stdout.strip()
+        console.print(diff or "[green]Up to date with the remote.[/green]")
         return
-    _merge_payload(data)
+
+    _pull_rebase_if_remote(vault)
+    reconcile_all(get_db(), get_entries_dir())
     console.print("[green]Pull complete.[/green]")
-
-
-@app.command(rich_help_panel="Data")
-def export(
-    out: Path | None = typer.Option(
-        None, "--out", "-o", help="Write JSONL to this file instead of stdout."
-    ),
-):
-    """Export all entries as JSON Lines (uid-sorted) to stdout or a file.
-
-    The output is the same payload format used by `push` / `pull`.
-    """
-    init_db()
-    data = git_sync.GitSyncPayload.dump(get_db())
-    if out is not None:
-        git_sync.atomic_write_bytes(out, data)
-        console.print(f"[green]Exported to {out}.[/green]")
-    else:
-        sys.stdout.buffer.write(data)
-
-
-@app.command(name="import", rich_help_panel="Data")
-def import_memos(
-    file: Path = typer.Argument(..., help="JSONL file to import (merged by uid + modified_at)."),
-):
-    """Import entries from a local JSONL file, merging into the local database.
-
-    Equivalent to `pull --file <file>` but without touching any Git clone.
-    """
-    init_db()
-    if not file.is_file():
-        exit_error(f"File does not exist: {file}")
-    data = file.read_bytes()
-    _merge_payload(data)
-    console.print("[green]Import complete.[/green]")
-
-
-@app.command(rich_help_panel="Data")
-def diff(
-    local_payload_path: Path | None = typer.Option(
-        None, "--file", help="Diff against this JSONL file instead of the Git clone."
-    ),
-):
-    """Show a uid-level diff between the local database and the remote payload.
-
-    Reports entries that are local-only, remote-only, or present in both but
-    changed (different content, tags, shortcut, or modified_at).
-    """
-    init_db()
-    data = _obtain_remote_payload(local_payload_path)
-    try:
-        remote_rows = git_sync.GitSyncPayload.load(data)
-    except Exception as e:
-        exit_error(f"Invalid sync payload: {e}")
-
-    remote = {r["uid"]: r for r in remote_rows}
-    local = {r.uid: r for r in get_db().get_memos(limit=None)}
-
-    local_only = sorted(set(local) - set(remote))
-    remote_only = sorted(set(remote) - set(local))
-    changed = []
-    for uid in set(local) & set(remote):
-        lrow, rrow = local[uid], remote[uid]
-        if (
-            (lrow.content or "") != (rrow.get("content") or "")
-            or (lrow.tags or "") != (rrow.get("tags") or "")
-            or (lrow.shortcut or None) != (rrow.get("shortcut") or None)
-            or (lrow.modified_at or "") != (rrow.get("modified_at") or "")
-        ):
-            changed.append(uid)
-    changed.sort()
-
-    if not (local_only or remote_only or changed):
-        console.print("[green]No differences — local and remote are in sync.[/green]")
-        return
-
-    for uid in local_only:
-        console.print(f"[green]+ local-only[/green]  {uid}  [{local[uid].idx}]")
-    for uid in remote_only:
-        console.print(f"[red]- remote-only[/red] {uid}")
-    for uid in changed:
-        console.print(f"[yellow]~ changed[/yellow]     {uid}  [{local[uid].idx}]")
-    console.print(
-        f"[dim]{len(local_only)} local-only, {len(remote_only)} remote-only, "
-        f"{len(changed)} changed[/dim]"
-    )
-
-
-@app.command(rich_help_panel="Data")
-def backup(
-    out: Path = typer.Option(
-        ..., "--out", "-o", help="Destination file for the SQLite snapshot (must not exist)."
-    ),
-):
-    """Write a consistent single-file snapshot of the local database (VACUUM INTO)."""
-    init_db()
-    if get_config().db_backend != "local":
-        exit_error("backup is only supported for the local sqlite backend.")
-    if out.exists():
-        exit_error(f"Destination already exists: {out}")
-    with get_db().connection() as conn:
-        conn.execute("VACUUM INTO ?", (str(out),))
-    console.print(f"[green]Backup written to {out}.[/green]")

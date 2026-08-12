@@ -1,27 +1,18 @@
 """`raw` prints the stored body byte-for-byte — no comment stripping, no newline normalization."""
 
 import pytest
+from _helpers import put_entry
 
 import koda.runtime as runtime
 
 
 @pytest.fixture
-def wired_db(db, monkeypatch):
-    """Point the lazy DB cache at a fresh temp database."""
-    monkeypatch.setattr(runtime, "_db", db)
+def wired_db(db):
     return db
 
 
 def _seed(db, content):
-    db.add_memo(
-        uid="seed001",
-        idx=1,
-        shortcut=None,
-        content=content,
-        tags="",
-        created_at="2026-01-01 00:00:00",
-        modified_at="2026-01-01 00:00:00",
-    )
+    put_entry(content, idx=1, uid="seed001000000000")
 
 
 def test_empty_content_stays_empty(wired_db, capsys):
