@@ -144,15 +144,15 @@ def test_push_dry_run_lists_changes_without_writing(tmp_path, bare_remote, monke
     subprocess.run(
         ["git", "-C", str(machine), "remote", "add", "origin", str(bare_remote)], check=True
     )
-    subprocess.run(
-        ["git", "-C", str(machine), "config", "user.email", "a@example.com"], check=True
-    )
+    subprocess.run(["git", "-C", str(machine), "config", "user.email", "a@example.com"], check=True)
     subprocess.run(["git", "-C", str(machine), "config", "user.name", "Machine"], check=True)
     git.push(dry_run=False)
     capsys.readouterr()  # discard the real push output
     log_before = subprocess.run(
         ["git", "-C", str(machine), "rev-list", "--count", "HEAD"],
-        capture_output=True, text=True, check=True,
+        capture_output=True,
+        text=True,
+        check=True,
     ).stdout.strip()
 
     # Local edits: modify entry1, add entry2, delete entry3.
@@ -170,10 +170,15 @@ def test_push_dry_run_lists_changes_without_writing(tmp_path, bare_remote, monke
     assert "new" in out and "two" in out
     assert "deleted" in out and "three" in out
     # Nothing was committed or pushed.
-    assert subprocess.run(
-        ["git", "-C", str(machine), "rev-list", "--count", "HEAD"],
-        capture_output=True, text=True, check=True,
-    ).stdout.strip() == log_before
+    assert (
+        subprocess.run(
+            ["git", "-C", str(machine), "rev-list", "--count", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        == log_before
+    )
     assert "Push complete." not in out
 
 
@@ -187,9 +192,7 @@ def test_push_dry_run_nothing_to_push(tmp_path, bare_remote, monkeypatch, capsys
     subprocess.run(
         ["git", "-C", str(machine), "remote", "add", "origin", str(bare_remote)], check=True
     )
-    subprocess.run(
-        ["git", "-C", str(machine), "config", "user.email", "a@example.com"], check=True
-    )
+    subprocess.run(["git", "-C", str(machine), "config", "user.email", "a@example.com"], check=True)
     subprocess.run(["git", "-C", str(machine), "config", "user.name", "Machine"], check=True)
     git.push(dry_run=False)
     capsys.readouterr()
@@ -233,10 +236,21 @@ def test_push_dry_run_warns_when_remote_ahead_without_rebasing(
     subprocess.run(["git", "-C", str(machine_b), "fetch", "-q", "origin"], check=True)
     default_branch = subprocess.run(
         ["git", "-C", str(machine_a), "rev-parse", "--abbrev-ref", "HEAD"],
-        capture_output=True, text=True, check=True,
+        capture_output=True,
+        text=True,
+        check=True,
     ).stdout.strip()
     subprocess.run(
-        ["git", "-C", str(machine_b), "checkout", "-q", "-B", default_branch, f"origin/{default_branch}"],
+        [
+            "git",
+            "-C",
+            str(machine_b),
+            "checkout",
+            "-q",
+            "-B",
+            default_branch,
+            f"origin/{default_branch}",
+        ],
         check=True,
     )
     # Machine B never runs `koda push`, so _ensure_repo never wrote a
@@ -269,9 +283,7 @@ def test_push_dry_run_local_only_when_no_remote(tmp_path, monkeypatch, capsys):
     runtime.init_db()
     memo._write_new_entry("echo one", "", None, None, None)
     subprocess.run(["git", "init", "-q", str(machine)], check=True)
-    subprocess.run(
-        ["git", "-C", str(machine), "config", "user.email", "a@example.com"], check=True
-    )
+    subprocess.run(["git", "-C", str(machine), "config", "user.email", "a@example.com"], check=True)
     subprocess.run(["git", "-C", str(machine), "config", "user.name", "Machine"], check=True)
     # No `koda push` has run here either — write the same .gitignore _ensure_repo would.
     (machine / ".gitignore").write_text(".koda/\n.obsidian/\n", encoding="utf-8")
@@ -311,10 +323,21 @@ def test_diff_in_sync_message(tmp_path, bare_remote, monkeypatch, capsys):
     subprocess.run(["git", "-C", str(machine_b), "fetch", "-q", "origin"], check=True)
     default_branch = subprocess.run(
         ["git", "-C", str(machine_a), "rev-parse", "--abbrev-ref", "HEAD"],
-        capture_output=True, text=True, check=True,
+        capture_output=True,
+        text=True,
+        check=True,
     ).stdout.strip()
     subprocess.run(
-        ["git", "-C", str(machine_b), "checkout", "-q", "-B", default_branch, f"origin/{default_branch}"],
+        [
+            "git",
+            "-C",
+            str(machine_b),
+            "checkout",
+            "-q",
+            "-B",
+            default_branch,
+            f"origin/{default_branch}",
+        ],
         check=True,
     )
     # Machine B never runs `koda push`, so _ensure_repo never wrote a
@@ -360,10 +383,21 @@ def test_diff_shows_push_pull_sections_with_hints(tmp_path, bare_remote, monkeyp
     subprocess.run(["git", "-C", str(machine_b), "fetch", "-q", "origin"], check=True)
     default_branch = subprocess.run(
         ["git", "-C", str(machine_a), "rev-parse", "--abbrev-ref", "HEAD"],
-        capture_output=True, text=True, check=True,
+        capture_output=True,
+        text=True,
+        check=True,
     ).stdout.strip()
     subprocess.run(
-        ["git", "-C", str(machine_b), "checkout", "-q", "-B", default_branch, f"origin/{default_branch}"],
+        [
+            "git",
+            "-C",
+            str(machine_b),
+            "checkout",
+            "-q",
+            "-B",
+            default_branch,
+            f"origin/{default_branch}",
+        ],
         check=True,
     )
     # Machine B never runs `koda push`, so _ensure_repo never wrote a

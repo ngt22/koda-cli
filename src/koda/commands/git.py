@@ -150,8 +150,13 @@ def _preview_push(vault: Path) -> None:
     if not _is_repo(vault):
         exit_error("Vault is not a git repository yet. Run `koda push` first.")
     status = _git(
-        vault, "-c", "core.quotepath=false", "status", "--porcelain",
-        "--untracked-files=all", check=False,
+        vault,
+        "-c",
+        "core.quotepath=false",
+        "status",
+        "--porcelain",
+        "--untracked-files=all",
+        check=False,
     ).stdout
     changes = _classify_changes(status)
     if changes:
@@ -179,7 +184,9 @@ def _preview_push(vault: Path) -> None:
 @app.command(rich_help_panel="Git sync")
 def push(
     dry_run: bool = typer.Option(
-        False, "--dry-run", "-n",
+        False,
+        "--dry-run",
+        "-n",
         help="Preview what a push would commit and push, without writing anything.",
     ),
 ):
@@ -269,15 +276,28 @@ def diff():
     _git(vault, "fetch", check=False)
     local = _classify_changes(
         _git(
-            vault, "-c", "core.quotepath=false", "status", "--porcelain",
-            "--untracked-files=all", check=False,
+            vault,
+            "-c",
+            "core.quotepath=false",
+            "status",
+            "--porcelain",
+            "--untracked-files=all",
+            check=False,
         ).stdout
     )
     pulled: dict[str, str] = {}
     if _has_upstream(vault):
         name_status = _git(
-            vault, "-c", "core.quotepath=false", "diff", "--name-status",
-            "HEAD", "@{u}", "--", "entries/", check=False,
+            vault,
+            "-c",
+            "core.quotepath=false",
+            "diff",
+            "--name-status",
+            "HEAD",
+            "@{u}",
+            "--",
+            "entries/",
+            check=False,
         ).stdout
         for line in name_status.splitlines():
             parts = line.split("\t")
