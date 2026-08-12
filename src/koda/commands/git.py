@@ -90,6 +90,41 @@ def _print_merge_plan(data: bytes) -> None:
     )
 
 
+def _print_push_plan(local_data: bytes) -> None:
+    """Show what a push would add/update/delete without writing (`--dry-run`)."""
+    remote_data = _obtain_remote_payload_readonly(None)
+    try:
+        local_rows = git_sync.GitSyncPayload.load(local_data)
+        remote_rows = git_sync.GitSyncPayload.load(remote_data)
+    except Exception as e:
+        exit_error(f"Invalid sync payload: {e}")
+
+    local = {r["uid"]: r for r in local_rows}
+    remote = {r["uid"]: r for r in remote_rows}
+    new = sorted(set(local) - set(remote))
+    deleted = sorted(set(remote) - set(local))
+    updated = sorted(uid for uid in set(local) & set(remote) if local[uid] != remote[uid])
+
+    if not (new or updated or deleted):
+        console.print("[green]Nothing to push — local and remote payloads are in sync.[/green]")
+    for uid in new:
+        console.print(
+            f"[green]+ new[/green]     {uid}  [{local[uid]['idx']}]  {_preview(local[uid]['content'])}"
+        )
+    for uid in updated:
+        console.print(
+            f"[yellow]~ update[/yellow]  {uid}  [{local[uid]['idx']}]  {_preview(local[uid]['content'])}"
+        )
+    for uid in deleted:
+        console.print(
+            f"[red]- delete[/red]   {uid}  [{remote[uid]['idx']}]  {_preview(remote[uid]['content'])}"
+        )
+    console.print(
+        f"[dim]{len(new)} new, {len(updated)} update, {len(deleted)} delete "
+        f"— dry run, no changes written.[/dim]"
+    )
+
+
 def _merge_payload(data: bytes) -> None:
     """Load a JSONL payload and merge it into the local DB, printing a summary."""
     try:
@@ -114,8 +149,17 @@ def push(
     payload_file: Path | None = typer.Option(
         None, "--file", help="Use this JSONL file instead of exporting the local database."
     ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        "-n",
+        help="Show what would be pushed (new/update/delete) without writing anything.",
+    ),
 ):
     """Write memo export (JSON Lines, uid-sorted) into the Git clone, commit, and push.
+
+    Use `-n` to preview what a push would change; nothing is written
+    (no pull, no commit, no push).
 
     Alias: `koda push`.
     """
@@ -138,6 +182,10 @@ def push(
             exit_error(f"Invalid sync payload: {e}")
     else:
         data = git_sync.GitSyncPayload.dump(get_db())
+
+    if dry_run:
+        _print_push_plan(data)
+        return
 
     repo.pull_rebase_if_remote()
 
