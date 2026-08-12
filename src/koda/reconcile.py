@@ -112,9 +112,14 @@ def reconcile_all(db: MemoDatabase, entries_dir: Path, *, force: bool = False) -
         present.add(rel)
         mtime = path.stat().st_mtime
         prior_uid = by_path.get(rel)
-        if not force and prior_uid and manifest.get(prior_uid, {}).get("mtime") == mtime:
-            seen_uids.add(prior_uid)  # unchanged
-            continue
+        if (
+            not force
+            and prior_uid
+            and manifest.get(prior_uid, {}).get("mtime") == mtime
+            and prior_uid not in seen_uids
+        ):
+            seen_uids.add(prior_uid)  # unchanged — but if a same-uid file already
+            continue  # won this scan, fall through so the LAST file wins
 
         entry = read_entry(path)
         if _normalize(entry, entries_dir, path, now, next_idx):
@@ -127,8 +132,9 @@ def reconcile_all(db: MemoDatabase, entries_dir: Path, *, force: bool = False) -
         if entry.uid in seen_uids:
             stderr_console.print(
                 f"[yellow]Warning: {rel!r} has the same uid ({entry.uid}) as another "
-                f"entries/*.md file already scanned this run — only the last one wins "
-                f"in the cache. Give one of them a fresh uid.[/yellow]"
+                f"entries/*.md file already scanned this run — only the last one "
+                f"(by filename order) wins in the cache. "
+                f"Give one of them a fresh uid.[/yellow]"
             )
         source, blessed = _resolve_source(db, entry, manifest)
         _upsert(db, entry, rel, mtime, source, blessed)
