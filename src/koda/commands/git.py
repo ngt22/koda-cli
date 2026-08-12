@@ -30,6 +30,32 @@ def _obtain_remote_payload(local_payload_path: Path | None) -> bytes:
     return payload_path.read_bytes()
 
 
+def _obtain_remote_payload_readonly(local_payload_path: Path | None) -> bytes:
+    """Return payload bytes for a *check* (diff / push --dry-run): read-only.
+
+    Never mutates the clone worktree — uses ``git fetch`` + ``origin/<branch>``
+    instead of ``pull --rebase``. With no remote, falls back to the worktree
+    payload file (what push would commit locally); missing → empty payload.
+    """
+    git_sync.require_jsonl_format(get_config())
+    if local_payload_path is not None:
+        if not local_payload_path.is_file():
+            exit_error(f"--file does not exist: {local_payload_path}")
+        return local_payload_path.read_bytes()
+    git_sync.require_git_cli()
+    sync_root = git_sync.resolve_sync_root(get_config())
+    repo = git_sync.GitSyncRepo(sync_root)
+    repo.ensure_worktree()
+    payload_path = git_sync.resolve_payload_path(get_config(), sync_root)
+    rel = payload_path.relative_to(sync_root).as_posix()
+    data = repo.fetch_remote_payload(rel)
+    if data is not None:
+        return data
+    if payload_path.is_file():
+        return payload_path.read_bytes()
+    return b""
+
+
 def _preview(content: str, width: int = 50) -> str:
     """First line of ``content``, collapsed and truncated for one-line display."""
     first = (content or "").splitlines()[0] if content else ""
@@ -217,7 +243,7 @@ def diff(
     changed (different content, tags, shortcut, or modified_at).
     """
     init_db()
-    data = _obtain_remote_payload(local_payload_path)
+    data = _obtain_remote_payload_readonly(local_payload_path)
     try:
         remote_rows = git_sync.GitSyncPayload.load(data)
     except Exception as e:

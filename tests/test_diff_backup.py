@@ -74,3 +74,48 @@ def test_backup_refuses_existing(wired_db, tmp_path):
     dest.write_text("x")
     with pytest.raises(typer.Exit):
         git_cmd.backup(out=dest)
+
+
+"""--- #158: diff must not mutate the clone worktree ---"""
+import subprocess
+
+
+def _git(*args, cwd=None):
+    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True)
+
+
+def _sync_pair(tmp_path):
+    remote = tmp_path / "remote.git"
+    _git("init", "--bare", str(remote))
+    clone = tmp_path / "clone"
+    _git("clone", str(remote), str(clone))
+    _git("-C", str(clone), "config", "user.name", "Test")
+    _git("-C", str(clone), "config", "user.email", "test@example.com")
+    return remote, clone
+
+
+def _seed_payload(clone, payload_bytes):
+    (clone / "koda-sync.jsonl").write_bytes(payload_bytes)
+    _git("-C", str(clone), "add", "koda-sync.jsonl")
+    _git("-C", str(clone), "commit", "-m", "seed")
+    _git("-C", str(clone), "push", "-u", "origin", "HEAD")
+
+
+def test_diff_readonly_does_not_pull_rebase(wired_db, tmp_path, monkeypatch, capsys):
+    import koda.runtime as runtime
+    from koda.config import Config
+    from koda.git_sync import GitSyncRepo
+
+    _, clone = _sync_pair(tmp_path)
+    _seed_payload(clone, b"")  # remote に空 payload（＝差分なし想定）
+    monkeypatch.setattr(runtime, "_config", Config(git_sync_path=str(clone)))
+    monkeypatch.setattr(runtime, "_db", wired_db)
+
+    # pull --rebase が呼ばれたら即失敗させる（読み取り専用の証明）
+    def _boom(self):
+        raise AssertionError("diff must not call pull_rebase_if_remote")
+
+    monkeypatch.setattr(GitSyncRepo, "pull_rebase_if_remote", _boom)
+
+    git_cmd.diff(local_payload_path=None)
+    assert "in sync" in capsys.readouterr().out
