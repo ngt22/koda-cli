@@ -119,12 +119,76 @@ def _push_if_remote(vault: Path) -> None:
         )
 
 
+def _classify_changes(status_output: str) -> dict[str, str]:
+    """Map `git status --porcelain` output → {path: 'new'|'updated'|'deleted'}.
+
+    Renames are reported under their new path as 'updated'; anything else
+    (typechange etc.) is treated as 'updated' too.
+    """
+    result: dict[str, str] = {}
+    for line in status_output.splitlines():
+        if not line:
+            continue
+        xy, path = line[:2], line[3:]
+        if " -> " in path:  # rename: "R  old -> new"
+            path = path.split(" -> ", 1)[1]
+        if xy == "??":
+            result[path] = "new"
+        elif "D" in xy:
+            result[path] = "deleted"
+        elif "A" in xy or "M" in xy or "R" in xy:
+            result[path] = "updated"
+    return result
+
+
+def _preview_push(vault: Path) -> None:
+    """Read-only preview for `koda push -n`: what would be committed and pushed.
+
+    Never stages, commits, pushes, or pulls --rebase; the only network call is
+    a read-only `git fetch` (mirrors `pull -n`).
+    """
+    if not _is_repo(vault):
+        exit_error("Vault is not a git repository yet. Run `koda push` first.")
+    status = _git(
+        vault, "-c", "core.quotepath=false", "status", "--porcelain", check=False
+    ).stdout
+    changes = _classify_changes(status)
+    if changes:
+        for kind, label in (("new", "new"), ("updated", "updated"), ("deleted", "deleted")):
+            for path in sorted(p for p, k in changes.items() if k == kind):
+                console.print(f"  {label:<8} {path}")
+        console.print(f"[dim]{len(changes)} change(s) would be committed.[/dim]")
+    else:
+        console.print("[yellow]No entry changes — nothing to push.[/yellow]")
+
+    _git(vault, "fetch", check=False)
+    if _has_upstream(vault):
+        ahead = _git(vault, "rev-list", "--count", "@{u}..HEAD", check=False).stdout.strip()
+        behind = _git(vault, "rev-list", "--count", "HEAD..@{u}", check=False).stdout.strip()
+        remote = f"{_first_remote(vault)}/{_current_branch(vault)}"
+        if ahead:
+            console.print(f"[dim]Would push {ahead} commit(s) to {remote}.[/dim]")
+        if behind:
+            console.print(
+                f"[yellow]Remote has {behind} commit(s) your vault does not — "
+                f"run `koda pull` first.[/yellow]"
+            )
+
+
 @app.command(rich_help_panel="Git sync")
-def push():
+def push(
+    dry_run: bool = typer.Option(
+        False, "--dry-run", "-n",
+        help="Preview what a push would commit and push, without writing anything.",
+    ),
+):
     """Commit the vault's Markdown entries and push to the git remote. Alias: `koda push`."""
     init_db()
     vault = get_vault()
     _require_git()
+    if dry_run:
+        _preview_push(vault)
+        return
     _ensure_repo(vault)
     _pull_rebase_if_remote(vault)
 

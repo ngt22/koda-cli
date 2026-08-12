@@ -7,6 +7,7 @@ import subprocess
 import pytest
 
 import koda.runtime as runtime
+from koda import md_store
 from koda.commands import git, memo
 
 
@@ -45,7 +46,7 @@ def test_push_then_pull_round_trip(tmp_path, bare_remote, monkeypatch):
     )
     subprocess.run(["git", "-C", str(machine_a), "config", "user.name", "Machine A"], check=True)
 
-    git.push()
+    git.push(dry_run=False)
 
     assert subprocess.run(
         ["git", "-C", str(bare_remote), "log", "--oneline"], capture_output=True, text=True
@@ -111,7 +112,7 @@ def test_pull_dry_run_previews_without_applying(tmp_path, bare_remote, monkeypat
         ["git", "-C", str(machine_a), "config", "user.email", "a@example.com"], check=True
     )
     subprocess.run(["git", "-C", str(machine_a), "config", "user.name", "Machine A"], check=True)
-    git.push()
+    git.push(dry_run=False)
     capsys.readouterr()  # discard machine A's push output
 
     machine_b = tmp_path / "machine-b"
@@ -130,3 +131,47 @@ def test_pull_dry_run_previews_without_applying(tmp_path, bare_remote, monkeypat
     assert not (machine_b / "entries").exists() or not list((machine_b / "entries").glob("*.md"))
     out = capsys.readouterr().out
     assert "No upstream branch" in out
+
+
+def test_push_dry_run_lists_changes_without_writing(tmp_path, bare_remote, monkeypatch, capsys):
+    machine = tmp_path / "machine"
+    machine.mkdir()
+    _switch_vault(monkeypatch, machine, tmp_path / "none.toml")
+    runtime.init_db()
+    entry1 = memo._write_new_entry("echo one", "", "one", None, None)
+    entry3 = memo._write_new_entry("echo three", "", None, None, None)
+    subprocess.run(["git", "init", "-q", str(machine)], check=True)
+    subprocess.run(
+        ["git", "-C", str(machine), "remote", "add", "origin", str(bare_remote)], check=True
+    )
+    subprocess.run(
+        ["git", "-C", str(machine), "config", "user.email", "a@example.com"], check=True
+    )
+    subprocess.run(["git", "-C", str(machine), "config", "user.name", "Machine"], check=True)
+    git.push(dry_run=False)
+    capsys.readouterr()  # discard the real push output
+    log_before = subprocess.run(
+        ["git", "-C", str(machine), "rev-list", "--count", "HEAD"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+
+    # Local edits: modify entry1, add entry2, delete entry3.
+    p1 = machine / "entries" / (runtime.get_db().path_for(entry1.uid) or "")
+    entry = md_store.read_entry(p1)
+    entry.content = "echo one edited"
+    md_store.write_entry(machine / "entries", entry, path=p1)
+    memo._write_new_entry("echo two", "", None, None, None)
+    (machine / "entries" / (runtime.get_db().path_for(entry3.uid) or "")).unlink()
+
+    git.push(dry_run=True)
+
+    out = capsys.readouterr().out
+    assert "updated" in out and "one" in out
+    assert "new" in out and "two" in out
+    assert "deleted" in out and "three" in out
+    # Nothing was committed or pushed.
+    assert subprocess.run(
+        ["git", "-C", str(machine), "rev-list", "--count", "HEAD"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip() == log_before
+    assert "Push complete." not in out
