@@ -1,5 +1,7 @@
 """Tests for the diff and backup commands (#74)."""
 
+import subprocess
+
 import pytest
 
 import koda.runtime as runtime
@@ -77,7 +79,6 @@ def test_backup_refuses_existing(wired_db, tmp_path):
 
 
 """--- #158: diff must not mutate the clone worktree ---"""
-import subprocess
 
 
 def _git(*args, cwd=None):
@@ -135,13 +136,11 @@ def test_diff_summary_counts_and_hints(wired_db, tmp_path, capsys):
             "UPDATE memos SET tags = ?, modified_at = ? WHERE idx = 0",
             ("edited", "2026-02-01 00:00:00"),
         )
-    remote.write_bytes(
-        (
-            remote.read_bytes()
-            + b'{"uid":"uid9999","idx":9,"content":"zeta","tags":"","created_at":'
-            b'"2026-01-01 00:00:00","modified_at":"2026-01-01 00:00:00","title":null}\n'
-        )
+    new_remote_data = (
+        remote.read_bytes() + b'{"uid":"uid9999","idx":9,"content":"zeta","tags":"","created_at":'
+        b'"2026-01-01 00:00:00","modified_at":"2026-01-01 00:00:00","title":null}\n'
     )
+    remote.write_bytes(new_remote_data)
 
     git_cmd.diff(local_payload_path=remote)
     out = capsys.readouterr().out

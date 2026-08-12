@@ -1,6 +1,7 @@
 """Tests for GitSyncPayload load/dump round-trips and parsing."""
 
 import json
+import subprocess
 
 import pytest
 import typer
@@ -184,7 +185,6 @@ def test_legacy_payload_line_without_title_parses():
 
 
 """--- #158: read-only remote payload fetch ---"""
-import subprocess
 
 
 def _git(*args, cwd=None):
@@ -245,12 +245,10 @@ def test_fetch_remote_payload_does_not_touch_worktree(tmp_path, sync_pair):
     _git("-C", str(clone), "push", "-f", "origin", "HEAD")
 
     head_before = subprocess.run(
-        ["git", "-C", str(clone), "rev-parse", "HEAD"],
-        capture_output=True, text=True
+        ["git", "-C", str(clone), "rev-parse", "HEAD"], capture_output=True, text=True
     ).stdout.strip()
     status_before = subprocess.run(
-        ["git", "-C", str(clone), "status", "--porcelain"],
-        capture_output=True, text=True
+        ["git", "-C", str(clone), "status", "--porcelain"], capture_output=True, text=True
     ).stdout
     marker_before = marker.read_text()
 
@@ -259,13 +257,11 @@ def test_fetch_remote_payload_does_not_touch_worktree(tmp_path, sync_pair):
     assert marker.read_text() == marker_before
 
     head_after = subprocess.run(
-        ["git", "-C", str(clone), "rev-parse", "HEAD"],
-        capture_output=True, text=True
+        ["git", "-C", str(clone), "rev-parse", "HEAD"], capture_output=True, text=True
     ).stdout.strip()
     assert head_after == head_before
 
     status_after = subprocess.run(
-        ["git", "-C", str(clone), "status", "--porcelain"],
-        capture_output=True, text=True
+        ["git", "-C", str(clone), "status", "--porcelain"], capture_output=True, text=True
     ).stdout
     assert status_after == status_before

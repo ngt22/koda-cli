@@ -69,9 +69,15 @@ def test_push_dry_run_lists_new_update_delete(sync_env, capsys):
         ],
     )
     # local: uidA(同値) / uidB(変更) / uidD(新規)
-    runtime.get_db().add_memo("uidA", 0, None, "alpha", "", "2026-01-01 00:00:00", "2026-01-01 00:00:00")
-    runtime.get_db().add_memo("uidB", 1, None, "beta-new", "", "2026-02-01 00:00:00", "2026-02-01 00:00:00")
-    runtime.get_db().add_memo("uidD", 3, None, "delta", "", "2026-01-01 00:00:00", "2026-01-01 00:00:00")
+    runtime.get_db().add_memo(
+        "uidA", 0, None, "alpha", "", "2026-01-01 00:00:00", "2026-01-01 00:00:00"
+    )
+    runtime.get_db().add_memo(
+        "uidB", 1, None, "beta-new", "", "2026-02-01 00:00:00", "2026-02-01 00:00:00"
+    )
+    runtime.get_db().add_memo(
+        "uidD", 3, None, "delta", "", "2026-01-01 00:00:00", "2026-01-01 00:00:00"
+    )
 
     git_cmd.push(payload_file=None, dry_run=True)
     out = capsys.readouterr().out
@@ -84,7 +90,9 @@ def test_push_dry_run_lists_new_update_delete(sync_env, capsys):
 
 def test_push_dry_run_nothing_to_push(sync_env, capsys):
     _seed_remote(sync_env, [_line("uidA", 0, "alpha")])
-    runtime.get_db().add_memo("uidA", 0, None, "alpha", "", "2026-01-01 00:00:00", "2026-01-01 00:00:00")
+    runtime.get_db().add_memo(
+        "uidA", 0, None, "alpha", "", "2026-01-01 00:00:00", "2026-01-01 00:00:00"
+    )
 
     git_cmd.push(payload_file=None, dry_run=True)
     assert "Nothing to push" in capsys.readouterr().out
@@ -92,7 +100,9 @@ def test_push_dry_run_nothing_to_push(sync_env, capsys):
 
 def test_push_dry_run_writes_nothing(sync_env, capsys):
     _seed_remote(sync_env, [_line("uidA", 0, "alpha")])
-    runtime.get_db().add_memo("uidB", 0, None, "beta", "", "2026-01-01 00:00:00", "2026-01-01 00:00:00")
+    runtime.get_db().add_memo(
+        "uidB", 0, None, "beta", "", "2026-01-01 00:00:00", "2026-01-01 00:00:00"
+    )
     payload_before = (sync_env / "koda-sync.jsonl").read_bytes()
     head_before = subprocess.run(
         ["git", "-C", str(sync_env), "rev-parse", "HEAD"],
@@ -108,11 +118,14 @@ def test_push_dry_run_writes_nothing(sync_env, capsys):
         text=True,
     ).stdout
     assert head_after == head_before  # コミットなし
-    assert "koda: sync memo payload" not in subprocess.run(
-        ["git", "-C", str(sync_env), "log", "--oneline"],
-        capture_output=True,
-        text=True,
-    ).stdout
+    assert (
+        "koda: sync memo payload"
+        not in subprocess.run(
+            ["git", "-C", str(sync_env), "log", "--oneline"],
+            capture_output=True,
+            text=True,
+        ).stdout
+    )
 
 
 def test_push_dry_run_never_pulls_or_pushes(sync_env, monkeypatch, capsys):
@@ -122,6 +135,10 @@ def test_push_dry_run_never_pulls_or_pushes(sync_env, monkeypatch, capsys):
     monkeypatch.setattr(GitSyncRepo, "pull_rebase_if_remote", _boom)
 
     _seed_remote(sync_env, [_line("uidA", 0, "alpha")])
-    runtime.get_db().add_memo("uidB", 0, None, "beta", "", "2026-01-01 00:00:00", "2026-01-01 00:00:00")
-    git_cmd.push(payload_file=None, dry_run=True)  # ここが通れば pull_rebase_if_remote は呼ばれていない
+    runtime.get_db().add_memo(
+        "uidB", 0, None, "beta", "", "2026-01-01 00:00:00", "2026-01-01 00:00:00"
+    )
+    git_cmd.push(
+        payload_file=None, dry_run=True
+    )  # ここが通れば pull_rebase_if_remote は呼ばれていない
     assert "1 new" in capsys.readouterr().out

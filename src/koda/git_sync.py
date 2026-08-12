@@ -347,8 +347,7 @@ class GitSyncRepo:
         branch = self.current_branch()
         if not branch:
             exit_error(
-                "Cannot fetch in detached HEAD in the sync clone. "
-                "Check out a branch, then retry."
+                "Cannot fetch in detached HEAD in the sync clone. Check out a branch, then retry."
             )
         try:
             subprocess.run(
@@ -359,8 +358,7 @@ class GitSyncRepo:
             )
         except subprocess.CalledProcessError as e:
             console.print(
-                "[red]git fetch failed in the sync clone. "
-                "Check the network/remote and retry.[/red]"
+                "[red]git fetch failed in the sync clone. Check the network/remote and retry.[/red]"
             )
             if e.stderr:
                 console.print(f"[dim]{e.stderr.strip()}[/dim]")

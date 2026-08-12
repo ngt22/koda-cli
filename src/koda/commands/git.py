@@ -109,15 +109,18 @@ def _print_push_plan(local_data: bytes) -> None:
         console.print("[green]Nothing to push — local and remote payloads are in sync.[/green]")
     for uid in new:
         console.print(
-            f"[green]+ new[/green]     {uid}  [{local[uid]['idx']}]  {_preview(local[uid]['content'])}"
+            f"[green]+ new[/green]     {uid}"
+            f"  [{local[uid]['idx']}]  {_preview(local[uid]['content'])}"
         )
     for uid in updated:
         console.print(
-            f"[yellow]~ update[/yellow]  {uid}  [{local[uid]['idx']}]  {_preview(local[uid]['content'])}"
+            f"[yellow]~ update[/yellow]  {uid}"
+            f"  [{local[uid]['idx']}]  {_preview(local[uid]['content'])}"
         )
     for uid in deleted:
         console.print(
-            f"[red]- delete[/red]   {uid}  [{remote[uid]['idx']}]  {_preview(remote[uid]['content'])}"
+            f"[red]- delete[/red]   {uid}"
+            f"  [{remote[uid]['idx']}]  {_preview(remote[uid]['content'])}"
         )
     console.print(
         f"[dim]{len(new)} new, {len(updated)} update, {len(deleted)} delete "
