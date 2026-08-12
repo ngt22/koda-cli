@@ -181,3 +181,91 @@ def test_legacy_payload_line_without_title_parses():
     data = b'{"uid":"uid0001","idx":0,"content":"x"}\n'
     loaded = GitSyncPayload.load(data)
     assert loaded[0]["title"] is None
+
+
+"""--- #158: read-only remote payload fetch ---"""
+import subprocess
+
+
+def _git(*args, cwd=None):
+    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True)
+
+
+@pytest.fixture
+def sync_pair(tmp_path):
+    """bare remote + clone のペアを作る。clone の初期ブランチ名は不問。"""
+    remote = tmp_path / "remote.git"
+    _git("init", "--bare", str(remote))
+    clone = tmp_path / "clone"
+    _git("clone", str(remote), str(clone))
+    _git("-C", str(clone), "config", "user.name", "Test")
+    _git("-C", str(clone), "config", "user.email", "test@example.com")
+    return remote, clone
+
+
+def test_fetch_remote_payload_reads_origin_blob(tmp_path, sync_pair):
+    from koda.git_sync import GitSyncRepo
+
+    _, clone = sync_pair
+    (clone / "koda-sync.jsonl").write_bytes(b'{"uid":"uid0001","idx":0,"content":"x"}\n')
+    _git("-C", str(clone), "add", "koda-sync.jsonl")
+    _git("-C", str(clone), "commit", "-m", "seed")
+    _git("-C", str(clone), "push", "-u", "origin", "HEAD")
+
+    data = GitSyncRepo(clone).fetch_remote_payload("koda-sync.jsonl")
+    assert data == b'{"uid":"uid0001","idx":0,"content":"x"}\n'
+
+
+def test_fetch_remote_payload_missing_file_returns_none(tmp_path, sync_pair):
+    from koda.git_sync import GitSyncRepo
+
+    _, clone = sync_pair
+    (clone / "other.txt").write_text("hello")
+    _git("-C", str(clone), "add", "other.txt")
+    _git("-C", str(clone), "commit", "-m", "seed")
+    _git("-C", str(clone), "push", "-u", "origin", "HEAD")
+    assert GitSyncRepo(clone).fetch_remote_payload("koda-sync.jsonl") is None
+
+
+def test_fetch_remote_payload_does_not_touch_worktree(tmp_path, sync_pair):
+    from koda.git_sync import GitSyncRepo
+
+    _, clone = sync_pair
+
+    marker = clone / "dirty.txt"
+    marker.write_text("dirty")
+
+    (clone / "koda-sync.jsonl").write_bytes(b'{"uid":"uid0001","idx":0,"content":"x"}\n')
+    _git("-C", str(clone), "add", ".")
+    _git("-C", str(clone), "commit", "-m", "seed")
+    _git("-C", str(clone), "push", "-u", "origin", "HEAD")
+
+    # Amend local commit and force-push to advance remote beyond clone's HEAD
+    _git("-C", str(clone), "commit", "--allow-empty", "-m", "advance", "--amend")
+    _git("-C", str(clone), "push", "-f", "origin", "HEAD")
+
+    head_before = subprocess.run(
+        ["git", "-C", str(clone), "rev-parse", "HEAD"],
+        capture_output=True, text=True
+    ).stdout.strip()
+    status_before = subprocess.run(
+        ["git", "-C", str(clone), "status", "--porcelain"],
+        capture_output=True, text=True
+    ).stdout
+    marker_before = marker.read_text()
+
+    GitSyncRepo(clone).fetch_remote_payload("koda-sync.jsonl")
+
+    assert marker.read_text() == marker_before
+
+    head_after = subprocess.run(
+        ["git", "-C", str(clone), "rev-parse", "HEAD"],
+        capture_output=True, text=True
+    ).stdout.strip()
+    assert head_after == head_before
+
+    status_after = subprocess.run(
+        ["git", "-C", str(clone), "status", "--porcelain"],
+        capture_output=True, text=True
+    ).stdout
+    assert status_after == status_before

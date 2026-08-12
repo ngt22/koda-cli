@@ -334,6 +334,45 @@ class GitSyncRepo:
                 console.print(f"[dim]{e.stderr.strip()}[/dim]")
             exit_error("git push failed.")
 
+    def fetch_remote_payload(self, rel_path: str) -> bytes | None:
+        """Return the payload bytes from ``<remote>/<branch>`` without touching
+        the worktree: ``git fetch`` then ``git show`` the blob from the fetched
+        ref. Returns None when the payload file does not exist on the remote
+        (treated as an empty payload by callers). Never runs pull --rebase."""
+        if not self.has_remote():
+            return None
+        remote = self.preferred_remote()
+        if not remote:
+            exit_error("No Git remote resolved for fetch in the sync clone.")
+        branch = self.current_branch()
+        if not branch:
+            exit_error(
+                "Cannot fetch in detached HEAD in the sync clone. "
+                "Check out a branch, then retry."
+            )
+        try:
+            subprocess.run(
+                ["git", "-C", str(self.sync_root), "fetch", remote, branch],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except subprocess.CalledProcessError as e:
+            console.print(
+                "[red]git fetch failed in the sync clone. "
+                "Check the network/remote and retry.[/red]"
+            )
+            if e.stderr:
+                console.print(f"[dim]{e.stderr.strip()}[/dim]")
+            exit_error("git fetch failed.")
+        r = subprocess.run(
+            ["git", "-C", str(self.sync_root), "show", f"{remote}/{branch}:{rel_path}"],
+            capture_output=True,
+        )
+        if r.returncode != 0:
+            return None
+        return r.stdout
+
 
 # ── Merge into local DB ─────────────────────────────────────────────────────
 
