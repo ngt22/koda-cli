@@ -249,3 +249,73 @@ def pull(
     _pull_rebase_if_remote(vault)
     reconcile_all(get_db(), get_entries_dir())
     console.print("[green]Pull complete.[/green]")
+
+
+@app.command(rich_help_panel="Git sync")
+def diff():
+    """Read-only pre-sync check: local vs remote changes with action hints.
+
+    Shows what ``koda push`` would publish and what ``koda pull`` would bring
+    in. Never writes to the vault (no pull --rebase, no commit, no push).
+    """
+    init_db()
+    vault = get_vault()
+    _require_git()
+    if not _is_repo(vault):
+        exit_error("Vault is not a git repository yet. Run `koda push` first.")
+    if not _has_remote(vault):
+        exit_error("No git remote configured for the vault.")
+
+    _git(vault, "fetch", check=False)
+    local = _classify_changes(
+        _git(
+            vault, "-c", "core.quotepath=false", "status", "--porcelain",
+            "--untracked-files=all", check=False,
+        ).stdout
+    )
+    pulled: dict[str, str] = {}
+    if _has_upstream(vault):
+        name_status = _git(
+            vault, "-c", "core.quotepath=false", "diff", "--name-status",
+            "HEAD", "@{u}", "--", "entries/", check=False,
+        ).stdout
+        for line in name_status.splitlines():
+            parts = line.split("\t")
+            if not parts:
+                continue
+            code, path = parts[0][0], parts[-1]
+            if code == "A":
+                pulled[path] = "new"
+            elif code in ("M", "R"):
+                pulled[path] = "updated"
+            elif code == "D":
+                pulled[path] = "deleted"
+
+    if not local and not pulled:
+        console.print("[green]In sync with the remote.[/green]")
+        return
+
+    if local:
+        console.print("Local changes — would be pushed with `koda push`:")
+        for kind, label in (("new", "new"), ("updated", "updated"), ("deleted", "deleted")):
+            for path in sorted(p for p, k in local.items() if k == kind):
+                console.print(f"  {label:<8} {path}")
+    if pulled:
+        console.print("Remote changes — would be pulled with `koda pull`:")
+        for kind, label in (("new", "new"), ("updated", "updated"), ("deleted", "deleted")):
+            for path in sorted(p for p, k in pulled.items() if k == kind):
+                console.print(f"  {label:<8} {path}")
+
+    console.print(
+        f"[cyan]{len(local)} change(s) would be pushed · "
+        f"{len(pulled)} change(s) would be pulled[/cyan]"
+    )
+    if local:
+        console.print("[dim]Next: `koda push` to publish local changes.[/dim]")
+    if pulled:
+        console.print("[dim]Next: `koda pull` to merge remote changes.[/dim]")
+    if local and pulled:
+        console.print(
+            "[dim]Concurrent edits to the same entry surface as a git conflict on "
+            "that file — resolve it in the vault, then `koda pull` again.[/dim]"
+        )
