@@ -119,3 +119,43 @@ def test_diff_readonly_does_not_pull_rebase(wired_db, tmp_path, monkeypatch, cap
 
     git_cmd.diff(local_payload_path=None)
     assert "in sync" in capsys.readouterr().out
+
+
+"""--- #158: diff action summary ---"""
+
+
+def test_diff_summary_counts_and_hints(wired_db, tmp_path, capsys):
+    _seed(wired_db, 0, "alpha")
+    remote = tmp_path / "remote.jsonl"
+    git_cmd.export(out=remote)
+    # 分岐: local-only(uid0002) / remote-only(uid9999) / changed(uid0001)
+    _seed(wired_db, 2, "gamma")
+    with wired_db.connection() as conn:
+        conn.execute(
+            "UPDATE memos SET tags = ?, modified_at = ? WHERE idx = 0",
+            ("edited", "2026-02-01 00:00:00"),
+        )
+    remote.write_bytes(
+        (
+            remote.read_bytes()
+            + b'{"uid":"uid9999","idx":9,"content":"zeta","tags":"","created_at":'
+            b'"2026-01-01 00:00:00","modified_at":"2026-01-01 00:00:00","title":null}\n'
+        )
+    )
+
+    git_cmd.diff(local_payload_path=remote)
+    out = capsys.readouterr().out
+    assert "2 memos would be pushed" in out  # local-only 1 + changed 1
+    assert "2 memos would be pulled" in out  # remote-only 1 + changed 1
+    assert "koda push" in out and "koda pull" in out
+    assert "modified_at" in out  # last-writer-wins 注記
+
+
+def test_diff_in_sync_has_no_summary(wired_db, tmp_path, capsys):
+    _seed(wired_db, 0, "alpha")
+    remote = tmp_path / "remote.jsonl"
+    git_cmd.export(out=remote)
+    git_cmd.diff(local_payload_path=remote)
+    out = capsys.readouterr().out
+    assert "No differences" in out
+    assert "would be pushed" not in out

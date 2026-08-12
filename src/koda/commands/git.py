@@ -329,6 +329,26 @@ def diff(
         f"{len(changed)} changed[/dim]"
     )
 
+    would_push = len(local_only) + len(changed)
+    would_pull = len(remote_only) + len(changed)
+    console.print(
+        f"[bold cyan]{would_push}[/bold cyan] memos would be pushed "
+        f"[dim](koda push)[/dim] — {len(local_only)} new, {len(changed)} changed"
+    )
+    console.print(
+        f"[bold cyan]{would_pull}[/bold cyan] memos would be pulled "
+        f"[dim](koda pull)[/dim] — {len(remote_only)} new, {len(changed)} changed"
+    )
+    if changed:
+        console.print(
+            "[dim]Entries changed on both sides resolve by modified_at — "
+            "the newer one wins (last-writer-wins).[/dim]"
+        )
+    console.print(
+        "[dim]Next: run `koda push` to sync local changes, "
+        "`koda pull` to fetch remote changes.[/dim]"
+    )
+
 
 @app.command(rich_help_panel="Data")
 def backup(
