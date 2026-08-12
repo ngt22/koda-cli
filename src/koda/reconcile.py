@@ -13,11 +13,17 @@ Trust: a file whose body no longer matches the ``blessed_hash`` koda recorded
 (or a file koda has never authored) is external → ``source='remote'`` and will
 prompt before ``koda x``. koda's own writes go through ``sync_path(blessed=True)``
 which records the new blessed hash → ``source='local'``.
+
+Scope: only top-level ``entries/*.md`` files are scanned — subfolders are not
+recursed into. Organize with tags/frontmatter, not folders; a ``.md`` you file
+into an Obsidian subfolder won't be picked up until it's moved back to
+``entries/``.
 """
 
 from datetime import datetime
 from pathlib import Path
 
+from .cli_utils import stderr_console
 from .constants import DATETIME_FMT
 from .db import MemoDatabase
 from .md_store import MdEntry, ensure_uid, read_entry, write_entry
@@ -36,6 +42,7 @@ def _normalize(entry: MdEntry, entries_dir: Path, path: Path, now: str, next_idx
         changed = True
     if not entry.modified_at:
         entry.modified_at = entry.created_at
+        changed = True
     if not entry.uid:
         ensure_uid(entry, now)
         changed = True
@@ -117,6 +124,12 @@ def reconcile_all(db: MemoDatabase, entries_dir: Path, *, force: bool = False) -
         if entry.idx is not None and entry.idx >= next_idx:
             next_idx = entry.idx + 1
 
+        if entry.uid in seen_uids:
+            stderr_console.print(
+                f"[yellow]Warning: {rel!r} has the same uid ({entry.uid}) as another "
+                f"entries/*.md file already scanned this run — only the last one wins "
+                f"in the cache. Give one of them a fresh uid.[/yellow]"
+            )
         source, blessed = _resolve_source(db, entry, manifest)
         _upsert(db, entry, rel, mtime, source, blessed)
         seen_uids.add(entry.uid)

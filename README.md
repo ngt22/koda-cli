@@ -727,7 +727,7 @@ Run `alias` in your shell to check for conflicts before adding these.
 
 ## Markdown file format
 
-Each entry is one plain Markdown file at `~/.koda-cli/entries/<slug>.md`: a YAML frontmatter block followed by the raw body.
+Each entry is one plain Markdown file at `~/.koda-cli/entries/<slug>.md`: a YAML frontmatter block followed by the raw body. Only top-level files in `entries/` are scanned — subfolders aren't recursed into, so organize with tags rather than filing entries into Obsidian subfolders.
 
 ```markdown
 ---

@@ -81,11 +81,26 @@ EXAMPLE_TEMPLATE = (
 
 PATH_OVERRIDE_ENV = "KODA_DB_PATH_OVERRIDE"
 
+# Sensitive dot-dirs under $HOME that vault.path must not point at (or into) —
+# koda writes entries/*.md, a .gitignore, and inits a git repo, any of which
+# could clobber credentials/keys if the vault were pointed here.
+_HOME_DENYLIST = (
+    ".ssh",
+    ".gnupg",
+    ".aws",
+    ".config",
+    ".kube",
+    ".docker",
+    ".gcloud",
+    ".azure",
+)
+
 
 def vault_path_allowed(v: Any) -> bool:
     """True if ``v`` is a safe vault directory. koda creates ``entries/*.md`` and
     a ``.koda`` cache inside it, so a tampered config/env must not point it at a
-    sensitive system location. Allowed: any path under ``$HOME``. The
+    sensitive system location. Allowed: any path under ``$HOME`` that isn't a
+    known sensitive dot-dir (``~/.ssh``, ``~/.aws``, ...) or inside one. The
     ``KODA_DB_PATH_OVERRIDE`` env var (truthy) lifts the restriction for CI and
     tests that use a temp location."""
     if os.getenv(PATH_OVERRIDE_ENV):
@@ -96,11 +111,12 @@ def vault_path_allowed(v: Any) -> bool:
         resolved = Path(v).expanduser().resolve()
     except (OSError, RuntimeError, ValueError):
         return False
+    home = Path.home().resolve()
     try:
-        resolved.relative_to(Path.home().resolve())
-        return True
+        rel = resolved.relative_to(home)
     except ValueError:
         return False
+    return rel.parts[:1] not in [(d,) for d in _HOME_DENYLIST]
 
 
 def valid_exec_shell(v: Any) -> bool:
@@ -218,7 +234,8 @@ _FIELD_SPECS: dict[str, FieldSpec] = {
     "vault.path": FieldSpec(
         str,
         vault_path_allowed,
-        "must be a directory under $HOME; set KODA_DB_PATH_OVERRIDE=1 to allow another location",
+        "must be a directory under $HOME, outside sensitive dirs like ~/.ssh; "
+        "set KODA_DB_PATH_OVERRIDE=1 to allow another location",
     ),
     "exec.shell": FieldSpec(
         str,

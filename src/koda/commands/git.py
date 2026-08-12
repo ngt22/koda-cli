@@ -128,7 +128,13 @@ def push():
     _ensure_repo(vault)
     _pull_rebase_if_remote(vault)
 
-    _git(vault, "add", "-A")
+    try:
+        _git(vault, "add", "-A")
+    except subprocess.CalledProcessError as e:
+        console.print("[red]git add failed. Resolve issues in the vault and retry.[/red]")
+        if e.stderr:
+            console.print(f"[dim]{e.stderr.strip()}[/dim]")
+        raise typer.Exit(code=1)
     if _git(vault, "diff", "--cached", "--quiet", check=False).returncode == 0:
         console.print("[yellow]No entry changes — nothing to commit.[/yellow]")
         _push_if_remote(vault)
