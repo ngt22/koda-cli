@@ -122,6 +122,7 @@ Grouped the same way as `koda --help`.
 | [`push`](#push-and-pull) | — | Commit & push the vault's `.md` entries (`-n` previews without writing) |
 | [`pull`](#push-and-pull) | — | Pull `.md` entries and reconcile the cache |
 | [`diff`](#push-and-pull) | — | Read-only local-vs-remote check with action hints |
+| [`resolve`](#push-and-pull) | — | Resolve duplicate display indices from a sync conflict |
 
 **Data**
 
@@ -839,6 +840,7 @@ koda push       # git add/commit the entries, then push to the remote
 koda push -n    # preview what a push would commit and push — writes nothing
 koda pull       # git pull --rebase, then reconcile the cache from the .md files
 koda diff       # read-only pre-sync check: local vs remote changes with action hints
+koda resolve    # resolve duplicate idx conflicts, then push the resolved version
 ```
 
 `koda diff` and `koda push -n` are strictly read-only: they only `git fetch`
@@ -854,6 +856,8 @@ and compare, and never modify the vault, commit, or push.
 `push` runs `git pull --rebase` first (when an upstream exists) so the branch stays linear, then commits `entries/*.md` and pushes. `pull` rebases the latest commits in and reconciles the cache. The `.koda/` cache directory is **git-ignored automatically** — koda adds it to `.gitignore` on first push, so the disposable cache never ends up in the repo.
 
 Concurrent edits to the *same* entry surface as an **ordinary git file conflict** on that one `.md` — resolve it with your usual git workflow, then run any `koda` command to reconcile.
+
+When two machines each add an entry that lands on the same display index, `koda push`/`koda pull` detect the duplicate `idx`, skip auto-resolution, and pause with exit code 5. `koda resolve` walks you through each conflict — pick which entry keeps the index (interactive fzf/numbered prompt, or `--ours`/`--theirs` non-interactively) and the rejected side is moved to the next free index. Run `koda push` again to publish the resolved version; the other machines then converge on `koda pull` (entries that changed index are reported as moved).
 
 > **Security note**: entries are stored as **plaintext `.md` files** committed to the repo.
 > Any passwords, tokens, or secrets stored in koda will be committed to the sync

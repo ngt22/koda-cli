@@ -12,10 +12,19 @@ import subprocess
 from pathlib import Path
 
 import typer
+from rich.text import Text
 
-from ..cli_utils import exit_error
+from ..cli_utils import ExitCode, exit_error
+from ..cmd_helpers.display import format_conflict_entry
+from ..conflicts import load_conflicts, save_conflicts
 from ..main import app
-from ..reconcile import reconcile_all
+from ..reconcile import (
+    annotate_groups,
+    compute_sync_diff,
+    find_conflicts,
+    reconcile_all,
+    snapshot_idx,
+)
 from ..runtime import console, get_db, get_entries_dir, get_vault, init_db
 
 # Kept out of sync: the local cache/trust ledger, and Obsidian's per-machine app
@@ -119,6 +128,63 @@ def _push_if_remote(vault: Path) -> None:
         )
 
 
+def _report_conflicts(groups: list[dict]) -> None:
+    console.print("[bold red]idx conflicts detected — not auto-resolved.[/bold red]")
+    console.print("These entries share a display index; koda skips them and asks you to choose.")
+    for g in groups:
+        console.print(f"\n  [bold cyan]idx {g['idx']}[/bold cyan]")
+        for e in g["entries"]:
+            console.print(Text.assemble("    ", format_conflict_entry(e)))
+    console.print(
+        "\n[dim]Resolve with `koda resolve` (interactive) or `koda resolve --ours|--theirs`, "
+        "then `koda push`.[/dim]"
+    )
+
+
+def _report_sync(diff: dict) -> None:
+    added, removed, moved = diff["added"], diff["removed"], diff["moved"]
+    parts = []
+    if added:
+        parts.append(f"[green]+{len(added)} added[/green]")
+    if removed:
+        parts.append(f"[red]-{len(removed)} removed[/red]")
+    if moved:
+        parts.append(f"[yellow]{len(moved)} moved[/yellow]")
+    if parts:
+        console.print("Sync: " + ", ".join(parts))
+    for uid, old, new in moved:
+        console.print(f"  [yellow]{old} → {new}[/yellow] {uid}")
+
+
+def _existing_conflicts(vault: Path, db) -> list[dict]:
+    """Return unresolved conflicts already present locally (from the ledger, or
+    freshly detected on disk), annotating and persisting the latter."""
+    groups = load_conflicts(vault)
+    if groups:
+        return groups
+    groups = find_conflicts(db)
+    if groups:
+        annotate_groups(groups, snapshot_idx(db))
+        save_conflicts(vault, groups)
+    return groups
+
+
+def _reconcile_after_pull(vault: Path, db, before: dict[str, int]) -> tuple[dict, list[dict]]:
+    """Reconcile the cache after a pull, then detect/record new conflicts.
+
+    Returns ``(diff, groups)`` where ``diff`` classifies added/removed/moved and
+    ``groups`` is the list of freshly recorded conflict groups (``[]`` if none).
+    """
+    reconcile_all(db, get_entries_dir())
+    after = snapshot_idx(db)
+    diff = compute_sync_diff(before, after)
+    groups = find_conflicts(db)
+    if groups:
+        annotate_groups(groups, before)
+        save_conflicts(vault, groups)
+    return diff, groups
+
+
 def _classify_changes(status_output: str) -> dict[str, str]:
     """Map `git status --porcelain` output → {path: 'new'|'updated'|'deleted'}.
 
@@ -193,13 +259,21 @@ def push(
     """Commit the vault's Markdown entries and push to the git remote. Alias: `koda push`."""
     init_db()
     vault = get_vault()
+    db = get_db()
     _require_git()
     if dry_run:
         _preview_push(vault)
         return
     _ensure_repo(vault)
-    _pull_rebase_if_remote(vault)
 
+    if _existing_conflicts(vault, db):
+        exit_error(
+            "Unresolved idx conflicts present — run `koda resolve` first.",
+            code=ExitCode.CONFLICT,
+        )
+
+    # Commit local changes first so `git pull --rebase` has a clean tree
+    # (koda resolve / edit / move / swap rewrite tracked files).
     try:
         _git(vault, "add", "-A")
     except subprocess.CalledProcessError as e:
@@ -207,19 +281,28 @@ def push(
         if e.stderr:
             console.print(f"[dim]{e.stderr.strip()}[/dim]")
         raise typer.Exit(code=1)
-    if _git(vault, "diff", "--cached", "--quiet", check=False).returncode == 0:
-        console.print("[yellow]No entry changes — nothing to commit.[/yellow]")
-        _push_if_remote(vault)
-        console.print("[green]Push complete.[/green]")
-        return
 
-    try:
-        _git(vault, "commit", "-m", "koda: sync entries")
-    except subprocess.CalledProcessError as e:
-        console.print("[red]git commit failed. Resolve issues in the vault and retry.[/red]")
-        if e.stderr:
-            console.print(f"[dim]{e.stderr.strip()}[/dim]")
-        raise typer.Exit(code=1)
+    if _git(vault, "diff", "--cached", "--quiet", check=False).returncode != 0:
+        try:
+            _git(vault, "commit", "-m", "koda: sync entries")
+        except subprocess.CalledProcessError as e:
+            console.print("[red]git commit failed. Resolve issues in the vault and retry.[/red]")
+            if e.stderr:
+                console.print(f"[dim]{e.stderr.strip()}[/dim]")
+            raise typer.Exit(code=1)
+
+    before = snapshot_idx(db)
+    _pull_rebase_if_remote(vault)
+    diff, groups = _reconcile_after_pull(vault, db, before)
+
+    if groups:
+        _report_sync(diff)
+        _report_conflicts(groups)
+        exit_error(
+            "Not pushing — resolve idx conflicts first (`koda resolve`).",
+            code=ExitCode.CONFLICT,
+        )
+
     _push_if_remote(vault)
     console.print("[green]Push complete.[/green]")
 
@@ -238,6 +321,7 @@ def pull(
     """
     init_db()
     vault = get_vault()
+    db = get_db()
     _require_git()
     if not _is_repo(vault):
         exit_error("Vault is not a git repository yet. Run `koda push` first.")
@@ -253,8 +337,25 @@ def pull(
         console.print(diff or "[green]Up to date with the remote.[/green]")
         return
 
+    if _existing_conflicts(vault, db):
+        exit_error(
+            "Unresolved idx conflicts present — run `koda resolve` first.",
+            code=ExitCode.CONFLICT,
+        )
+
+    before = snapshot_idx(db)
     _pull_rebase_if_remote(vault)
-    reconcile_all(get_db(), get_entries_dir())
+    diff, groups = _reconcile_after_pull(vault, db, before)
+
+    if groups:
+        _report_sync(diff)
+        _report_conflicts(groups)
+        exit_error(
+            "Sync paused on idx conflicts — run `koda resolve`, then `koda push`.",
+            code=ExitCode.CONFLICT,
+        )
+
+    _report_sync(diff)
     console.print("[green]Pull complete.[/green]")
 
 

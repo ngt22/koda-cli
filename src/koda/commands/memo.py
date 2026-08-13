@@ -20,7 +20,7 @@ from ..db import compute_uid
 from ..main import RESERVED_SHORTCUTS, app
 from ..md_store import MdEntry, read_entry, write_entry
 from ..models import MemoRow
-from ..reconcile import sync_path
+from ..reconcile import find_conflicts, sync_path
 from ..runtime import (
     _read_stdin_refs,
     _validate_list_columns,
@@ -452,6 +452,13 @@ def _list_memos_impl(
     display: str | None = None,
 ) -> None:
     init_db()
+
+    conflicts = find_conflicts(get_db())
+    if conflicts:
+        console.print(
+            f"[bold yellow]Warning: {len(conflicts)} unresolved idx conflict(s) — "
+            f"run `koda resolve`.[/bold yellow]"
+        )
 
     if columns is None:
         columns = get_config().list_columns
