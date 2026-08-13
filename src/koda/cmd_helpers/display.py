@@ -31,3 +31,27 @@ def print_memo(
         title_line.append(title)
         console.print(title_line)
     console.print(f"Tags: [magenta]{tags}[/magenta]\n" + "-" * 20 + f"\n{content}")
+
+
+def format_conflict_entry(e: dict) -> Text:
+    """Render one idx-conflict entry (side + shortcut + label + move hint).
+
+    Returns a :class:`Text` so the user-controlled ``title``/first content line
+    is appended literally and never interpreted as Rich markup (mirrors the
+    comment in :func:`print_memo`).
+    """
+    t = Text()
+    if e.get("side") == "ours":
+        t.append("OURS   ", style="bold blue")
+    elif e.get("side") == "theirs":
+        t.append("THEIRS ", style="bold magenta")
+    else:
+        t.append("? ", style="dim")
+    if e.get("shortcut"):
+        t.append(e["shortcut"] + " ", style="bold green")
+    label = e.get("title") or ((e.get("content") or "").splitlines() or [""])[0]
+    t.append(label)
+    prev = e.get("prev_idx")
+    if prev is not None and prev != e.get("idx"):
+        t.append(f" (was {prev})", style="dim")
+    return t

@@ -111,7 +111,7 @@ def main(
 # every subcommand on ``app``. These imports must follow ``app`` (and ALIASES /
 # RESERVED_SHORTCUTS, which the command modules import from here).
 from .commands import exec as _exec  # noqa: E402,F401
-from .commands import git, index, manage, memo  # noqa: E402,F401
+from .commands import git, index, manage, memo, resolve  # noqa: E402,F401
 from .commands import update as _update  # noqa: E402,F401
 
 if __name__ == "__main__":

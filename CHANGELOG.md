@@ -16,6 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `koda diff`: read-only pre-sync check showing local vs remote changes with
   action hints (`koda push` / `koda pull`); prints "In sync with the remote."
   when there is nothing to do.
+- `koda resolve`: resolves duplicate display indices across machines. When
+  `koda push`/`koda pull` detects two entries sharing an `idx`, sync pauses
+  (exit code 5) and the conflict is recorded instead of being silently
+  resolved; `koda resolve` keeps a chosen winner (interactive fzf / numbered
+  prompt, or `--ours`/`--theirs` for non-interactive) and moves the rejected
+  side to the next free index. `koda push` then publishes the resolved version
+  so every machine converges.
 
 ### Fixed
 - `koda migrate` now skips legacy rows whose uid already exists in the vault

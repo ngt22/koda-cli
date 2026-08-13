@@ -17,6 +17,7 @@ class ExitCode(IntEnum):
     NOT_FOUND = 2
     CANCELLED = 3
     DB_ERROR = 4
+    CONFLICT = 5
 
 
 def exit_error(

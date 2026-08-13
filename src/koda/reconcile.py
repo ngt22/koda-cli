@@ -167,3 +167,78 @@ def sync_path(db: MemoDatabase, entries_dir: Path, path: Path, *, blessed: bool)
 def remove_path(db: MemoDatabase, path: Path) -> None:
     """Drop the cache row for a file koda just deleted."""
     db.delete_by_path(path.name)
+
+
+# --------------------------------------------------------------------------- #
+# idx-conflict detection and sync diff (used by push/pull/resolve)
+# --------------------------------------------------------------------------- #
+def snapshot_idx(db: MemoDatabase) -> dict[str, int]:
+    """Return ``{uid: idx}`` for every cached entry — the sync-diff baseline."""
+    with db.connection() as conn:
+        rows = conn.execute("SELECT uid, idx FROM memos").fetchall()
+    return {uid: idx for uid, idx in rows if idx is not None}
+
+
+def compute_sync_diff(before: dict[str, int], after: dict[str, int]) -> dict[str, list]:
+    """Classify a uid→idx change between two snapshots.
+
+    Returns ``{"added": [uid], "removed": [uid], "moved": [(uid, old, new)]}``.
+    """
+    added = [uid for uid in after if uid not in before]
+    removed = [uid for uid in before if uid not in after]
+    moved = [
+        (uid, before[uid], after[uid])
+        for uid in before
+        if uid in after and before[uid] != after[uid]
+    ]
+    return {"added": added, "removed": removed, "moved": moved}
+
+
+def find_conflicts(db: MemoDatabase) -> list[dict]:
+    """Return ``[{idx, entries: [entry_dict]}]`` for every idx held by >1 entry.
+
+    Each ``entry_dict`` is JSON-serializable and carries ``side``/``prev_idx``
+    placeholders (filled by :func:`annotate_groups`).
+    """
+    by_idx: dict[int, list] = {}
+    for row in db.get_memos(sort_by="idx"):
+        by_idx.setdefault(row.idx, []).append(row)
+    groups = []
+    for idx, rows in sorted(by_idx.items()):
+        if len(rows) <= 1:
+            continue
+        entries = [
+            {
+                "uid": row.uid,
+                "path": db.path_for(row.uid) or "",
+                "idx": idx,
+                "shortcut": row.shortcut or "",
+                "tags": row.tags or "",
+                "title": row.title or "",
+                "content": row.content or "",
+                "created_at": row.created_at or "",
+                "side": None,
+                "prev_idx": None,
+            }
+            for row in rows
+        ]
+        groups.append({"idx": idx, "entries": entries})
+    return groups
+
+
+def annotate_groups(groups: list[dict], before: dict[str, int]) -> list[dict]:
+    """Attach ``side``/``prev_idx`` to each conflict entry given the pre-pull
+    ``{uid: idx}`` snapshot. ``ours`` = held this idx before; ``theirs`` =
+    incoming (brand-new, or moved from a different idx). Mutates and returns
+    ``groups``."""
+    for group in groups:
+        idx = group["idx"]
+        for e in group["entries"]:
+            uid = e["uid"]
+            if before.get(uid) == idx:
+                e["side"] = "ours"
+                e["prev_idx"] = idx
+            else:
+                e["side"] = "theirs"
+                e["prev_idx"] = before.get(uid)
+    return groups
