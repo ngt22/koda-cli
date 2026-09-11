@@ -17,12 +17,18 @@ def print_memo(
     source: str | None = None,
     title: str | None = None,
 ) -> None:
-    sc_str = f" | SC: [bold green]{shortcut}[/bold green]" if shortcut else ""
-    ts = f"created: {created_at}"
+    header = Text("\nIDX: ", style="bold cyan")
+    header.append(str(idx), style="bold cyan")
+    header.append(f" ({uid})")
+    if shortcut:
+        header.append(" | SC: ")
+        header.append(shortcut, style="bold green")
+    header.append(f" | created: {created_at}")
     if modified_at and modified_at != created_at:
-        ts += f" | modified: {modified_at}"
-    src_str = " | [yellow]source: remote[/yellow]" if source == "remote" else ""
-    console.print(f"\n[bold cyan]IDX: {idx}[/bold cyan] ({uid}){sc_str} | {ts}{src_str}")
+        header.append(f" | modified: {modified_at}")
+    if source == "remote":
+        header.append(" | source: remote", style="yellow")
+    console.print(header)
     if title:
         # Build with Text so user-controlled content is never interpolated into
         # Rich markup — a title containing "[bold]" must render literally.
@@ -30,7 +36,12 @@ def print_memo(
         title_line.append("Title: ", style="bold")
         title_line.append(title)
         console.print(title_line)
-    console.print(f"Tags: [magenta]{tags}[/magenta]\n" + "-" * 20 + f"\n{content}")
+    details = Text()
+    details.append("Tags: ")
+    details.append(str(tags), style="magenta")
+    details.append("\n" + "-" * 20 + "\n")
+    details.append(str(content))
+    console.print(details)
 
 
 def format_conflict_entry(e: dict) -> Text:

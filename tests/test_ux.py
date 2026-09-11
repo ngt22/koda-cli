@@ -77,6 +77,19 @@ class TestShowTimestamps:
         )
         assert "source: remote" in capsys.readouterr().out
 
+    def test_bracketed_tags_and_content_render_literally(self, capsys):
+        print_memo(
+            "uid0001",
+            0,
+            None,
+            "chezmoi diff [path]",
+            "[work]",
+            "2026-01-01 00:00:00",
+        )
+        out = capsys.readouterr().out
+        assert "[work]" in out
+        assert "chezmoi diff [path]" in out
+
 
 class TestEmptyShortcut:
     def test_empty_shortcut_rejected(self, wired_db):
