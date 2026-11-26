@@ -1,28 +1,43 @@
-"""Data models for koda memos."""
+"""Data models and identity helpers shared by every layer."""
 
+import hashlib
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Optional
 
-from .constants import TAG_SEPARATOR
+from .constants import DATETIME_FMT, TAG_SEPARATOR
+
+# 16 hex chars = 64 bits: keeps the sync merge key collision-resistant.
+UID_LENGTH = 16
+
+VALID_SORT_COLUMNS = frozenset(
+    {
+        "idx",
+        "uid",
+        "tags",
+        "content",
+        "created_at",
+        "modified_at",
+        "shortcut",
+        "title",
+        "description",
+        "id",
+    }
+)
+
+
+def compute_uid(content: str, created_at: str) -> str:
+    """Stable entry identity: sha1(content + created_at), truncated."""
+    return hashlib.sha1(f"{content}{created_at}".encode()).hexdigest()[:UID_LENGTH]
+
+
+def now_str() -> str:
+    return datetime.now().strftime(DATETIME_FMT)
 
 
 @dataclass(frozen=True)
 class MemoRow:
-    """A row materialized from the memos table.
-
-    Field order matches the canonical SELECT projection used across the
-    database layer: id, uid, idx, content, tags, shortcut, created_at,
-    modified_at, source, title, description.
-
-    ``source`` is a local trust annotation ('local' = authored or reviewed on
-    this machine; 'remote' = brought in by a Git sync and not yet reviewed). It
-    is intentionally NOT part of the sync payload, so a peer cannot label its
-    own entries 'local' to dodge the exec confirmation.
-
-    ``title`` is a display-only, human-readable label (nullable). It is synced
-    content but is never used to resolve a ref — ``shortcut`` stays the only
-    callable name.
-    """
+    """A cache row. ``source`` is local-only trust state and is never synced."""
 
     id: int
     uid: str
@@ -45,13 +60,9 @@ class MemoRow:
 
     @classmethod
     def from_rows(cls, rows) -> list["MemoRow"]:
-        """Materialize many guaranteed-non-null rows (e.g. a ``fetchall``
-        result). Unlike ``from_row`` the elements are never None, so the return
-        type is a plain ``list[MemoRow]``."""
         return [cls(*row) for row in rows]
 
     def to_dict(self) -> dict[str, Any]:
-        """JSON-serializable view of the row. ``tags`` is split into a list."""
         return {
             "id": self.id,
             "uid": self.uid,

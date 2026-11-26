@@ -24,6 +24,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   side to the next free index. `koda push` then publishes the resolved version
   so every machine converges.
 
+### Changed
+- Internal cleanup: removed SQLite-era dead code (unused constants, the old
+  editor-footer parser) and consolidated duplicated logic (sort validation,
+  entry deletion, exec argv/remote-confirmation, fzf invocation, git change
+  listing, config key checks).
+- `koda remove` and `koda pick --show` now print the same entry header as
+  `koda show` (including `modified` and the `source: remote` flag).
+- `--sort-by` help lists every valid column; git hints show the actual vault
+  path instead of `~/.koda-cli`.
+
 ### Fixed
 - `koda tag` and `koda copy` no longer mark an unreviewed `source=remote`
   entry as trusted. Tagging preserves the entry's trust state, and a copy of a

@@ -1,10 +1,6 @@
-"""Shared CLI runtime: lazy config/DB resolution and cross-command helpers.
+"""Shared CLI runtime: lazily resolved config/cache and cross-command helpers.
 
-Everything here is imported by the command modules in ``koda.commands`` and by
-``koda.main``. It deliberately does NOT import the Typer ``app`` or any command
-module, so importing it (and therefore ``koda.main``) has no side effects: no
-config read, no DB handle. Config and the database are resolved lazily on first
-use.
+Must not import ``koda.main`` or command modules; importing it has no side effects.
 """
 
 import os
@@ -17,22 +13,17 @@ from importlib.metadata import version
 from pathlib import Path
 
 import typer
-from rich.console import Console
 
-from .cli_utils import ExitCode, exit_error
+from .cli_utils import ExitCode, console, exit_error
 from .cmd_helpers.parsing import parse_var_items
 from .config import Config, ConfigManager, ValidationError, vault_path_allowed
 from .db import DatabaseError, MemoDatabase
+from .models import VALID_SORT_COLUMNS, MemoRow
 from .reconcile import reconcile_all
 
 __app_name__ = "koda"
 __version__ = version("koda-cli")
 
-console = Console()
-
-# Config and DB are resolved lazily so that ``import koda.main`` has no
-# side effects (no config load, no DB handle). This keeps the module
-# importable in environments without HOME/env set and makes it testable.
 _config_manager: ConfigManager | None = None
 _config: Config | None = None
 _config_sources: dict[str, str] | None = None
@@ -40,7 +31,6 @@ _db: MemoDatabase | None = None
 
 
 def get_config_manager() -> ConfigManager:
-    """Return the process-wide ConfigManager, creating it on first use."""
     global _config_manager
     if _config_manager is None:
         _config_manager = ConfigManager()
@@ -48,31 +38,25 @@ def get_config_manager() -> ConfigManager:
 
 
 def _resolve_config() -> None:
-    """Load the config + per-key source map once and cache them."""
     global _config, _config_sources
     if _config is None:
         _config, _config_sources = get_config_manager().load()
 
 
 def get_config() -> Config:
-    """Return the loaded Config, loading it lazily on first use."""
     _resolve_config()
     assert _config is not None
     return _config
 
 
 def get_config_sources() -> dict[str, str]:
-    """Return the per-key config source map, loading lazily on first use."""
     _resolve_config()
     assert _config_sources is not None
     return _config_sources
 
 
 def get_vault() -> Path:
-    """Return the vault directory (holds ``entries/`` and the ``.koda`` cache).
-
-    vault.path from a config file or KODA_VAULT_PATH env bypasses validate(), so
-    re-check here before koda creates files at an attacker-chosen location."""
+    """Vault dir. Re-validated here because file/env values bypass ``config set`` validation."""
     cfg = get_config()
     if not vault_path_allowed(cfg.vault_path):
         exit_error(
@@ -83,26 +67,36 @@ def get_vault() -> Path:
 
 
 def get_entries_dir() -> Path:
-    """Return ``<vault>/entries`` — the source-of-truth ``.md`` directory."""
     return get_vault() / "entries"
 
 
-def _cache_path() -> Path:
-    """Return ``<vault>/.koda/cache.db`` — the disposable derived cache."""
-    return get_vault() / ".koda" / "cache.db"
-
-
-def _resolve_db() -> MemoDatabase:
-    """Return the MemoDatabase (cache) handle, constructing it lazily."""
+def get_db() -> MemoDatabase:
     global _db
     if _db is None:
-        _db = MemoDatabase(path=_cache_path())
+        _db = MemoDatabase(path=get_vault() / ".koda" / "cache.db")
     return _db
 
 
-def get_db() -> MemoDatabase:
-    """Return the lazily constructed MemoDatabase (cache) handle."""
-    return _resolve_db()
+def entry_file(row: MemoRow) -> Path | None:
+    rel = get_db().path_for(row.uid)
+    return get_entries_dir() / rel if rel else None
+
+
+def delete_entry(row: MemoRow) -> None:
+    path = entry_file(row)
+    if path and path.exists():
+        path.unlink()
+    get_db().delete_by_uid(row.uid)
+
+
+def resolve_sort(sort_by: str | None, desc: bool | None) -> tuple[str, bool]:
+    """Apply config defaults and validate ``--sort-by``."""
+    cfg = get_config()
+    column = (sort_by or cfg.list_sort_by).lower()
+    if column not in VALID_SORT_COLUMNS:
+        valid = ", ".join(sorted(VALID_SORT_COLUMNS))
+        exit_error(f"Invalid --sort-by '{sort_by}'. Use one of: {valid}.")
+    return column, cfg.list_desc if desc is None else desc
 
 
 def version_callback(value: bool):
@@ -112,11 +106,7 @@ def version_callback(value: bool):
 
 
 def resolve_editor() -> list[str]:
-    """Resolve ``$EDITOR`` to a command vector, falling back to ``vim``.
-
-    Handles an empty/whitespace ``EDITOR`` (which would otherwise try to exec
-    ``""`` and crash) and multi-word editors such as ``code --wait``.
-    """
+    """``$EDITOR`` as argv (handles empty values and ``code --wait``); defaults to vim."""
     raw = os.environ.get("EDITOR", "").strip() or "vim"
     try:
         parts = shlex.split(raw)
@@ -126,7 +116,6 @@ def resolve_editor() -> list[str]:
 
 
 def launch_editor(path: str) -> None:
-    """Open ``path`` in the user's editor, exiting cleanly if it cannot run."""
     editor = resolve_editor()
     try:
         subprocess.call([*editor, path])
@@ -138,12 +127,7 @@ def launch_editor(path: str) -> None:
 
 
 def init_db():
-    """Ensure the cache exists and reflects the current ``.md`` files.
-
-    Runs on every command: the cache is brought up to schema, then reconciled
-    against ``entries/`` (mtime-gated, so the steady state is just ``stat``
-    calls) so external add/edit/delete/rename by Obsidian, an editor, an AI
-    agent, or ``git pull`` are picked up before the command reads anything."""
+    """Bring the cache to schema and reconcile it with ``entries/`` (run by every command)."""
     try:
         db = get_db()
         db.init_db()
@@ -156,11 +140,8 @@ def init_db():
         exit_error(f"Database Error: {e}", code=ExitCode.DB_ERROR)
 
 
-def resolve_ref(ref: str | None):
-    """Return (id, uid, idx, content, tags, shortcut, created_at) or exit.
-
-    ref=None → latest; digit string → idx lookup; other string → shortcut lookup.
-    """
+def resolve_ref(ref: str | None) -> MemoRow:
+    """None → latest entry; digits → idx; otherwise → shortcut. Exits if not found."""
     if ref is None:
         row = get_db().get_latest_entry()
         if row is None:
@@ -226,20 +207,23 @@ def _strip_inline_comment(line: str) -> str:
 
 
 def emit_raw(ref: str | None, vars: list[str] | None = None) -> None:
-    init_db()
     row = resolve_ref(ref)
     content = _apply_vars(row.content if row.content is not None else "", vars)
     sys.stdout.write(content)
 
 
 def _read_stdin_refs() -> list[str]:
-    """Read whitespace-separated entry refs from stdin (non-interactive only)."""
+    """Whitespace-separated refs from piped stdin."""
     if sys.stdin.isatty():
         return []
-    data = sys.stdin.read().strip()
-    if not data:
-        return []
-    return [part for part in data.split() if part]
+    return sys.stdin.read().split()
+
+
+def single_stdin_ref(command: str) -> str | None:
+    refs = _read_stdin_refs()
+    if len(refs) > 1:
+        exit_error(f"{command} accepts one ref from stdin. Got multiple values.")
+    return refs[0] if refs else None
 
 
 def _validate_list_columns(columns: list[str], source: str) -> None:
@@ -250,23 +234,17 @@ def _validate_list_columns(columns: list[str], source: str) -> None:
 
 
 def detect_install_method() -> str | None:
-    """Detect how koda was installed: 'uv', 'pipx', 'venv-pip', 'pip', or None."""
-    uv = shutil.which("uv")
-    if uv:
+    """'uv', 'pipx', 'venv-pip', 'pip', or None."""
+    for name, args in (("uv", ["tool", "list"]), ("pipx", ["list"])):
+        exe = shutil.which(name)
+        if not exe:
+            continue
         try:
-            out = subprocess.run([uv, "tool", "list"], capture_output=True, text=True, timeout=10)
-            if "koda-cli" in out.stdout:
-                return "uv"
+            out = subprocess.run([exe, *args], capture_output=True, text=True, timeout=10)
         except (OSError, subprocess.SubprocessError):
-            pass
-    pipx = shutil.which("pipx")
-    if pipx:
-        try:
-            out = subprocess.run([pipx, "list"], capture_output=True, text=True, timeout=10)
-            if "koda-cli" in out.stdout:
-                return "pipx"
-        except (OSError, subprocess.SubprocessError):
-            pass
+            continue
+        if "koda-cli" in out.stdout:
+            return name
     if sys.prefix != sys.base_prefix:
         return "venv-pip"
     if shutil.which("python3"):
@@ -275,7 +253,6 @@ def detect_install_method() -> str | None:
 
 
 def run_update() -> None:
-    """Update koda to the latest version using the detected install method."""
     method = detect_install_method()
     if method is None:
         console.print("[yellow]Could not detect how koda was installed.[/yellow]")
@@ -300,6 +277,5 @@ def run_update() -> None:
 
 
 def update_callback(value: bool) -> None:
-    """Typer eager callback for ``--update``."""
     if value:
         run_update()

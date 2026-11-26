@@ -1,9 +1,4 @@
-"""The `config` subcommand group: show, get, set, unset, reset, edit, path.
-
-This module builds its own ``config_app`` Typer group; ``koda.main`` mounts it
-with ``app.add_typer``. It must not import ``koda.main`` so that main can import
-``config_app`` at assembly time without a circular import.
-"""
+"""`koda config` group. Must not import ``koda.main`` (main mounts ``config_app``)."""
 
 import json
 import sys
@@ -12,7 +7,7 @@ import typer
 
 from ..cli_utils import ExitCode, confirm, exit_error
 from ..config import ALL_KEYS as _ALL_KEYS
-from ..config import CONFIG_PATH, EXAMPLE_TEMPLATE, ConfigManager, ValidationError
+from ..config import EXAMPLE_TEMPLATE, ConfigManager, ValidationError
 from ..runtime import (
     console,
     get_config,
@@ -30,8 +25,19 @@ config_app = typer.Typer(
 )
 
 
+def _require_key(key: str) -> None:
+    if key not in _ALL_KEYS:
+        exit_error(f"Unknown key: {key!r}. Valid keys: {', '.join(sorted(_ALL_KEYS))}")
+
+
+def _read_file_data() -> dict:
+    try:
+        return get_config_manager().read_raw()
+    except ValidationError as e:
+        exit_error(str(e))
+
+
 def _render_config(json_output: bool) -> None:
-    """Print every setting with its value (and source, in the table view)."""
     if json_output:
         out: dict[str, dict[str, object]] = {}
         for dotkey in _ALL_KEYS:
@@ -83,8 +89,7 @@ def config_get(
     key: str = typer.Argument(..., help="Config key (e.g. defaults.cmd)."),
 ) -> None:
     """Print a single config value (plain text, for scripting)."""
-    if key not in _ALL_KEYS:
-        exit_error(f"Unknown key: {key!r}. Valid keys: {', '.join(sorted(_ALL_KEYS))}")
+    _require_key(key)
     sys.stdout.write(str(ConfigManager.get(get_config(), key)) + "\n")
 
 
@@ -94,21 +99,15 @@ def config_set_cmd(
     value: str = typer.Argument(..., help="New value."),
 ) -> None:
     """Write a setting to the config file."""
-    if key not in _ALL_KEYS:
-        exit_error(f"Unknown key: {key!r}. Valid keys: {', '.join(sorted(_ALL_KEYS))}")
+    _require_key(key)
     try:
         coerced = ConfigManager.coerce(key, value)
         ConfigManager.validate(key, coerced)
     except ValidationError as e:
         exit_error(str(e))
     sec, subkey = key.split(".", 1)
-    try:
-        file_data = get_config_manager().read_raw()
-    except ValidationError as e:
-        exit_error(str(e))
-    if sec not in file_data:
-        file_data[sec] = {}
-    file_data[sec][subkey] = coerced
+    file_data = _read_file_data()
+    file_data.setdefault(sec, {})[subkey] = coerced
     get_config_manager().write_raw(file_data)
     console.print(f"[green]Set {key} = {coerced!r}[/green]")
 
@@ -118,13 +117,9 @@ def config_unset(
     key: str = typer.Argument(..., help="Config key to remove from the file."),
 ) -> None:
     """Remove a key from the config file (reverts to default)."""
-    if key not in _ALL_KEYS:
-        exit_error(f"Unknown key: {key!r}. Valid keys: {', '.join(sorted(_ALL_KEYS))}")
+    _require_key(key)
     sec, subkey = key.split(".", 1)
-    try:
-        file_data = get_config_manager().read_raw()
-    except ValidationError as e:
-        exit_error(str(e))
+    file_data = _read_file_data()
     if sec not in file_data or subkey not in file_data[sec]:
         console.print(f"[yellow]{key} is not set in the config file.[/yellow]")
         return
@@ -141,25 +136,27 @@ def config_reset(
     force: bool = typer.Option(False, "--force", "-f", help="Reset without prompting."),
 ) -> None:
     """Delete the config file, reverting all settings to defaults."""
-    if not CONFIG_PATH.exists():
+    path = get_config_manager().config_path
+    if not path.exists():
         console.print("[yellow]No config file found.[/yellow]")
         return
-    if not force and not confirm(f"Delete config file at {CONFIG_PATH}?"):
+    if not force and not confirm(f"Delete config file at {path}?"):
         exit_error("Cancelled.", code=ExitCode.CANCELLED, style="yellow")
-    CONFIG_PATH.unlink()
-    console.print(f"[green]Config reset (deleted {CONFIG_PATH}).[/green]")
+    path.unlink()
+    console.print(f"[green]Config reset (deleted {path}).[/green]")
 
 
 @config_app.command("edit")
 def config_edit_cmd() -> None:
     """Open the config file in $EDITOR."""
-    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    if not CONFIG_PATH.exists():
-        CONFIG_PATH.write_text(EXAMPLE_TEMPLATE, encoding="utf-8")
-    launch_editor(str(CONFIG_PATH))
+    path = get_config_manager().config_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists():
+        path.write_text(EXAMPLE_TEMPLATE, encoding="utf-8")
+    launch_editor(str(path))
 
 
 @config_app.command("path")
 def config_path_cmd() -> None:
     """Print the path to the config file."""
-    sys.stdout.write(str(CONFIG_PATH) + "\n")
+    sys.stdout.write(str(get_config_manager().config_path) + "\n")

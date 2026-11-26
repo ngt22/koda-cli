@@ -1,14 +1,8 @@
-"""Display-index manipulation commands: move, swap, shift, compact.
-
-``idx`` lives in each entry's Markdown frontmatter (the source of truth), so
-these commands rewrite the affected ``.md`` files and reflect the change into
-the cache. Reordering is not a content edit, so it never bumps ``modified_at``
-and never changes trust (``sync_path(blessed=False)`` preserves local/remote).
-"""
+"""Display-index commands: move, swap, shift, compact. Never bump modified_at or change trust."""
 
 import typer
 
-from ..cli_utils import exit_error
+from ..cli_utils import entries, exit_error
 from ..main import app
 from ..md_store import read_entry, write_entry
 from ..models import MemoRow
@@ -22,8 +16,6 @@ def _rows_by_idx() -> tuple[list[MemoRow], dict[int, MemoRow]]:
 
 
 def _apply_idx(changes: dict[str, int]) -> None:
-    """Rewrite frontmatter ``idx`` for each ``uid → new_idx`` and sync the cache.
-    Uses ``blessed=False`` so a reorder preserves each entry's trust state."""
     entries_dir = get_entries_dir()
     db = get_db()
     for uid, new_idx in changes.items():
@@ -101,10 +93,8 @@ def shift_cmd(
                 f"entries exist in [{start + count}, {start - 1}]."
             )
     if dry_run:
-        n = len(affected)
         console.print(
-            f"[cyan]Would shift {n} entr{'y' if n == 1 else 'ies'} "
-            f"from index {start} by {count:+d}.[/cyan]"
+            f"[cyan]Would shift {entries(len(affected))} from index {start} by {count:+d}.[/cyan]"
         )
         return
     _apply_idx({r.uid: r.idx + count for r in affected})
@@ -148,9 +138,7 @@ def compact_indices(
         console.print("[green]Indices are already contiguous from 0.[/green]")
         return
     if dry_run:
-        n = len(changes)
-        console.print(f"[cyan]Would compact indices for {n} entr{'y' if n == 1 else 'ies'}.[/cyan]")
+        console.print(f"[cyan]Would compact indices for {entries(len(changes))}.[/cyan]")
         return
     _apply_idx(changes)
-    n = len(changes)
-    console.print(f"[green]Compacted indices for {n} entr{'y' if n == 1 else 'ies'}.[/green]")
+    console.print(f"[green]Compacted indices for {entries(len(changes))}.[/green]")

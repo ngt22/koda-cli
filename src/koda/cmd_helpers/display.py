@@ -1,56 +1,39 @@
-"""Rich-formatted memo display."""
+"""Rich display helpers. User content is always appended as Text, never as markup."""
 
-from rich.console import Console
 from rich.text import Text
 
-console = Console()
+from ..cli_utils import console
+from ..models import MemoRow
 
 
-def print_memo(
-    uid: str,
-    idx: int,
-    shortcut: str | None,
-    content: str | None,
-    tags: str | None,
-    created_at: str | None,
-    modified_at: str | None = None,
-    source: str | None = None,
-    title: str | None = None,
-) -> None:
+def first_line(content: str | None) -> str:
+    return ((content or "").splitlines() or [""])[0]
+
+
+def print_memo(row: MemoRow) -> None:
     header = Text("\nIDX: ", style="bold cyan")
-    header.append(str(idx), style="bold cyan")
-    header.append(f" ({uid})")
-    if shortcut:
+    header.append(str(row.idx), style="bold cyan")
+    header.append(f" ({row.uid})")
+    if row.shortcut:
         header.append(" | SC: ")
-        header.append(shortcut, style="bold green")
-    header.append(f" | created: {created_at}")
-    if modified_at and modified_at != created_at:
-        header.append(f" | modified: {modified_at}")
-    if source == "remote":
+        header.append(row.shortcut, style="bold green")
+    header.append(f" | created: {row.created_at}")
+    if row.modified_at and row.modified_at != row.created_at:
+        header.append(f" | modified: {row.modified_at}")
+    if row.source == "remote":
         header.append(" | source: remote", style="yellow")
     console.print(header)
-    if title:
-        # Build with Text so user-controlled content is never interpolated into
-        # Rich markup — a title containing "[bold]" must render literally.
-        title_line = Text()
-        title_line.append("Title: ", style="bold")
-        title_line.append(title)
-        console.print(title_line)
+    if row.title:
+        console.print(Text.assemble(("Title: ", "bold"), row.title))
     details = Text()
     details.append("Tags: ")
-    details.append(str(tags), style="magenta")
+    details.append(str(row.tags), style="magenta")
     details.append("\n" + "-" * 20 + "\n")
-    details.append(str(content))
+    details.append(str(row.content))
     console.print(details)
 
 
 def format_conflict_entry(e: dict) -> Text:
-    """Render one idx-conflict entry (side + shortcut + label + move hint).
-
-    Returns a :class:`Text` so the user-controlled ``title``/first content line
-    is appended literally and never interpreted as Rich markup (mirrors the
-    comment in :func:`print_memo`).
-    """
     t = Text()
     if e.get("side") == "ours":
         t.append("OURS   ", style="bold blue")
@@ -60,7 +43,7 @@ def format_conflict_entry(e: dict) -> Text:
         t.append("? ", style="dim")
     if e.get("shortcut"):
         t.append(e["shortcut"] + " ", style="bold green")
-    label = e.get("title") or ((e.get("content") or "").splitlines() or [""])[0]
+    label = e.get("title") or first_line(e.get("content"))
     t.append(label)
     prev = e.get("prev_idx")
     if prev is not None and prev != e.get("idx"):

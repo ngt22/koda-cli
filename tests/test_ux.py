@@ -7,6 +7,7 @@ from _helpers import put_entry
 
 from koda.cmd_helpers.display import print_memo
 from koda.commands import memo
+from koda.models import MemoRow
 
 
 @pytest.fixture
@@ -59,32 +60,39 @@ class TestPaginationHint:
 class TestShowTimestamps:
     def test_labels_created_and_modified(self, capsys):
         print_memo(
-            "uid0001", 0, None, "body", "", "2026-01-01 00:00:00", "2026-02-01 00:00:00", "local"
+            MemoRow(1, "uid0001", 0, "body", "", None, "2026-01-01 00:00:00", "2026-02-01 00:00:00")
         )
         out = capsys.readouterr().out
         assert "created: 2026-01-01 00:00:00" in out
         assert "modified: 2026-02-01 00:00:00" in out
 
     def test_modified_omitted_when_same_as_created(self, capsys):
-        print_memo("uid0001", 0, None, "body", "", "2026-01-01 00:00:00", "2026-01-01 00:00:00")
+        print_memo(
+            MemoRow(1, "uid0001", 0, "body", "", None, "2026-01-01 00:00:00", "2026-01-01 00:00:00")
+        )
         out = capsys.readouterr().out
         assert "created:" in out
         assert "modified:" not in out
 
     def test_remote_source_flagged(self, capsys):
         print_memo(
-            "uid0001", 0, None, "body", "", "2026-01-01 00:00:00", "2026-01-01 00:00:00", "remote"
+            MemoRow(
+                1,
+                "uid0001",
+                0,
+                "body",
+                "",
+                None,
+                "2026-01-01 00:00:00",
+                "2026-01-01 00:00:00",
+                "remote",
+            )
         )
         assert "source: remote" in capsys.readouterr().out
 
     def test_bracketed_tags_and_content_render_literally(self, capsys):
         print_memo(
-            "uid0001",
-            0,
-            None,
-            "chezmoi diff [path]",
-            "[work]",
-            "2026-01-01 00:00:00",
+            MemoRow(1, "uid0001", 0, "chezmoi diff [path]", "[work]", None, "2026-01-01 00:00:00")
         )
         out = capsys.readouterr().out
         assert "[work]" in out

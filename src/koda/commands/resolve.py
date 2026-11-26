@@ -1,22 +1,14 @@
-"""Resolve duplicate display indices (idx conflicts).
+"""Resolve duplicate display indices: the chosen entry keeps the idx, the rest move to free ones."""
 
-A conflict is two or more entries sharing the same ``idx``. This command lets
-the user pick a winner (keeps the idx) and moves the losers to the next free
-idx automatically. Interactive mode uses fzf when available (falling back to a
-numbered prompt); ``--ours``/``--theirs`` resolve non-interactively.
-"""
-
-import os
-import shlex
 import shutil
-import subprocess
 import sys
 
 import typer
 from rich.text import Text
 
 from ..cli_utils import ExitCode, exit_error
-from ..cmd_helpers.display import format_conflict_entry
+from ..cmd_helpers.display import first_line, format_conflict_entry
+from ..cmd_helpers.interactive import run_fzf
 from ..conflicts import clear_conflicts, load_conflicts
 from ..main import app
 from ..reconcile import annotate_groups, find_conflicts, snapshot_idx
@@ -27,7 +19,7 @@ from .index import _apply_idx
 def _pick_winner_fzf(entries: list[dict]) -> str | None:
     lines = []
     for e in entries:
-        first = ((e["content"] or "").splitlines() or [""])[0].replace("\t", " ")
+        first = first_line(e["content"]).replace("\t", " ")
         label = (e["title"] or first).replace("\t", " ")
         prev = e.get("prev_idx")
         prev_s = f"was:{prev}" if prev is not None else "-"
@@ -35,8 +27,7 @@ def _pick_winner_fzf(entries: list[dict]) -> str | None:
             f"{e['uid']}\t{e['side'] or '?'}\t{e['shortcut'] or '-'}\t"
             f"{e['tags'] or '-'}\t{prev_s}\t{label}"
         )
-    cmd = [
-        "fzf",
+    args = [
         "--delimiter",
         "\t",
         "--with-nth",
@@ -47,17 +38,13 @@ def _pick_winner_fzf(entries: list[dict]) -> str | None:
         "printf '%s\\n' '{6}'",
         "--no-multi",
     ]
-    extra = os.environ.get("KODA_FZF_OPTS", "").strip()
-    if extra:
-        cmd.extend(shlex.split(extra))
-    proc = subprocess.run(cmd, input="\n".join(lines), text=True, stdout=subprocess.PIPE)
-    if proc.returncode != 0 or not proc.stdout.strip():
+    out = run_fzf(lines, args)
+    if not out or not out.strip():
         return None
-    return proc.stdout.strip().split("\t", 1)[0]
+    return out.strip().split("\t", 1)[0]
 
 
 def _pick_winner(idx: int, entries: list[dict]) -> str:
-    """Interactively choose which entry keeps ``idx``; returns the winning uid."""
     console.print(f"\n[bold cyan]idx {idx}[/bold cyan] is held by {len(entries)} entries:")
     for i, e in enumerate(entries, 1):
         console.print(Text.assemble(f"  {i}. ", format_conflict_entry(e)))
@@ -96,12 +83,7 @@ def resolve(
         help="Keep the incoming (theirs) entry at each conflicted idx; move ours.",
     ),
 ):
-    """Resolve duplicate display indices and move the rejected side to a free idx.
-
-    Runs interactively (fzf / numbered prompt) by default. Use ``--ours`` or
-    ``--theirs`` to resolve every group non-interactively. After resolving, run
-    ``koda push`` to publish the resolved version so other machines converge.
-    """
+    """Resolve duplicate display indices (fzf / prompt, or --ours / --theirs), then `koda push`."""
     if ours and theirs:
         exit_error("Use only one of --ours or --theirs.", code=ExitCode.INVALID_ARG)
 
