@@ -25,6 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so every machine converges.
 
 ### Fixed
+- `koda tag` and `koda copy` no longer mark an unreviewed `source=remote`
+  entry as trusted. Tagging preserves the entry's trust state, and a copy of a
+  remote entry stays `source=remote`, so `koda x` still prompts before running it.
 - `koda migrate` now skips legacy rows whose uid already exists in the vault
   instead of writing a duplicate `.md` file. Skipped rows are recorded as a
   koda entry (tag: `migrate`) and listed in the command output — nothing is
