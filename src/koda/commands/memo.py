@@ -55,6 +55,7 @@ def _write_new_entry(
     shortcut: str | None,
     title: str | None,
     description: str | None = None,
+    trusted: bool = True,
 ) -> MdEntry:
     """Create a brand-new ``.md`` entry (truth), then reflect it into the cache
     as koda-authored (``source='local'``). Returns the written entry."""
@@ -72,7 +73,7 @@ def _write_new_entry(
         modified_at=now,
     )
     path = write_entry(entries_dir, entry)
-    sync_path(get_db(), entries_dir, path, blessed=True)
+    sync_path(get_db(), entries_dir, path, blessed=trusted)
     return entry
 
 
@@ -299,7 +300,14 @@ def copy(
     init_db()
     row = resolve_ref(ref)
     # A copy keeps the source title/description (display labels travel with the body).
-    entry = _write_new_entry(row.content or "", row.tags or "", None, row.title, row.description)
+    entry = _write_new_entry(
+        row.content or "",
+        row.tags or "",
+        None,
+        row.title,
+        row.description,
+        trusted=row.source != "remote",
+    )
     console.print(f"[green]Copied [{row.idx}] → [{entry.idx}] ({entry.uid}).[/green]")
 
 
@@ -778,7 +786,7 @@ def tag(
             entry.tags = TAG_SEPARATOR.join(new_tags)
             entry.modified_at = now
             write_entry(entries_dir, entry, path=path)
-            sync_path(get_db(), entries_dir, path, blessed=True)
+            sync_path(get_db(), entries_dir, path, blessed=False)
         updated += 1
         added_count += len(added)
         removed_count += len(removed)
