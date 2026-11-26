@@ -5,7 +5,8 @@ import string
 
 from _helpers import put_entry
 
-from koda.db import UID_LENGTH, MemoDatabase, compute_uid
+from koda.db import MemoDatabase
+from koda.models import UID_LENGTH, compute_uid
 
 
 def test_uid_is_16_lowercase_hex_chars():

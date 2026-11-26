@@ -4,49 +4,37 @@ import json
 import re
 import sys
 import tempfile
-from datetime import datetime
 from pathlib import Path
 
 import typer
 from rich.table import Table
 from rich.text import Text
 
-from ..cli_utils import ExitCode, confirm, exit_error
-from ..cmd_helpers.display import print_memo as _print_memo
+from ..cli_utils import ExitCode, confirm, entries, exit_error, plural
+from ..cmd_helpers.display import first_line, print_memo
 from ..cmd_helpers.parsing import parse_indices, parse_tag_args
-from ..config import COLUMN_DEFS, VALID_LIST_COLUMNS, VALID_SORT_COLUMNS
-from ..constants import DATETIME_FMT, TAG_SEPARATOR
-from ..db import compute_uid
-from ..main import RESERVED_SHORTCUTS, app
+from ..config import COLUMN_DEFS, DISPLAY_MODES, VALID_LIST_COLUMNS
+from ..constants import TAG_SEPARATOR
+from ..main import RESERVED_SHORTCUTS, SORT_HELP, VAR_HELP, app
 from ..md_store import MdEntry, read_entry, write_entry
-from ..models import MemoRow
+from ..models import compute_uid, now_str
 from ..reconcile import find_conflicts, sync_path
 from ..runtime import (
     _read_stdin_refs,
     _validate_list_columns,
     console,
+    delete_entry,
     emit_raw,
+    entry_file,
     get_config,
     get_db,
     get_entries_dir,
     init_db,
     launch_editor,
     resolve_ref,
+    resolve_sort,
+    single_stdin_ref,
 )
-
-
-def _generate_uid(content: str, created_at: str) -> str:
-    return compute_uid(content, created_at)
-
-
-def _now() -> str:
-    return datetime.now().strftime(DATETIME_FMT)
-
-
-def _entry_file(row: MemoRow) -> Path | None:
-    """Absolute path of the ``.md`` file backing ``row`` (or None if unknown)."""
-    rel = get_db().path_for(row.uid)
-    return get_entries_dir() / rel if rel else None
 
 
 def _write_new_entry(
@@ -57,9 +45,8 @@ def _write_new_entry(
     description: str | None = None,
     trusted: bool = True,
 ) -> MdEntry:
-    """Create a brand-new ``.md`` entry (truth), then reflect it into the cache
-    as koda-authored (``source='local'``). Returns the written entry."""
-    now = _now()
+    """Write a new ``.md`` and cache it; ``trusted=False`` keeps it ``source='remote'``."""
+    now = now_str()
     entries_dir = get_entries_dir()
     entry = MdEntry(
         content=content,
@@ -86,12 +73,6 @@ def _validate_shortcut(shortcut: str | None) -> str | None:
 
 
 def _validate_title(title: str | None) -> str | None:
-    """Strip and validate a title value.
-
-    Explicit empty/whitespace → error (user passed --title but gave nothing).
-    Newline in value → error (title must be a single line).
-    Otherwise return the stripped value, or None when the input is None.
-    """
     if title is None:
         return None
     stripped = title.strip()
@@ -148,7 +129,7 @@ def _add_impl(
 
     entry = _write_new_entry(content, formatted_tags, shortcut, title, description)
     uid, new_idx = entry.uid, entry.idx
-    assert uid is not None  # _write_new_entry always assigns one
+    assert uid is not None
 
     if print_uid:
         sys.stdout.write(uid + "\n")
@@ -248,46 +229,29 @@ def rm(
             return
 
         n = len(target_rows)
-        console.print(f"\n[bold red]About to delete {n} entr{'y' if n == 1 else 'ies'}:[/bold red]")
+        console.print(f"\n[bold red]About to delete {entries(n)}:[/bold red]")
         for row in target_rows[:10]:
-            preview = (row.content or "").splitlines()[0][:60]
-            console.print(f"  [{row.idx}] ({row.uid}) {preview}")
+            console.print(f"  [{row.idx}] ({row.uid}) {first_line(row.content)[:60]}")
         if n > 10:
             console.print(f"  ... and {n - 10} more")
 
-        if not force and not confirm(f"\nDelete {n} entr{'y' if n == 1 else 'ies'}?"):
+        if not force and not confirm(f"\nDelete {entries(n)}?"):
             exit_error("Cancelled.", code=ExitCode.CANCELLED, style="yellow")
 
         for row in target_rows:
-            p = _entry_file(row)
-            if p and p.exists():
-                p.unlink()
-            get_db().delete_by_uid(row.uid)
-        console.print(f"[red]Deleted {n} entr{'y' if n == 1 else 'ies'}.[/red]")
+            delete_entry(row)
+        console.print(f"[red]Deleted {entries(n)}.[/red]")
 
     else:
-        ref = indices[0] if indices else None
-        row = resolve_ref(ref)
-        _print_memo(
-            row.uid,
-            row.idx,
-            row.shortcut,
-            row.content,
-            row.tags,
-            row.created_at,
-            title=row.title,
-        )
+        row = resolve_ref(indices[0] if indices else None)
+        print_memo(row)
         console.print("\n[bold red]This entry will be deleted.[/bold red]")
 
         if not force and not confirm("Delete this entry?"):
             exit_error("Cancelled.", code=ExitCode.CANCELLED, style="yellow")
 
-        p = _entry_file(row)
-        if p and p.exists():
-            p.unlink()
-        get_db().delete_by_uid(row.uid)
-        preview = row.content.splitlines()[0][:50] if row.content else ""
-        console.print(f"[red]Deleted [{row.idx}]: {preview}...[/red]")
+        delete_entry(row)
+        console.print(f"[red]Deleted [{row.idx}]: {first_line(row.content)[:50]}...[/red]")
 
 
 @app.command(name="copy", rich_help_panel="Core")
@@ -299,7 +263,6 @@ def copy(
     """Duplicate an entry to a new row (same body and tags, no shortcut). Alias: `koda c`."""
     init_db()
     row = resolve_ref(ref)
-    # A copy keeps the source title/description (display labels travel with the body).
     entry = _write_new_entry(
         row.content or "",
         row.tags or "",
@@ -318,16 +281,10 @@ def edit(
     ),
     quiet: bool = typer.Option(False, "--quiet", help="Suppress the success message."),
 ):
-    """Open an entry's Markdown file in $EDITOR (frontmatter + body).
-
-    You edit the real ``.md`` directly, so every field — body, tags, shortcut,
-    title, description — is right there in the file. Reviewing an entry this way
-    marks it trusted (``source='local'``), clearing any remote warning on exec.
-    Alias: `koda e`.
-    """
+    """Open the entry's ``.md`` in $EDITOR; saving marks it reviewed (trusted). Alias: `koda e`."""
     init_db()
     row = resolve_ref(ref)
-    path = _entry_file(row)
+    path = entry_file(row)
     if path is None or not path.exists():
         exit_error(
             "Entry file not found. The cache may be stale; run `koda reindex`.",
@@ -337,7 +294,6 @@ def edit(
     launch_editor(str(path))
 
     if not path.exists():
-        # The editor (or user) removed the file → drop it from the cache too.
         get_db().delete_by_uid(row.uid)
         if not quiet:
             console.print(f"[red]Entry [{row.idx}] file removed.[/red]")
@@ -346,13 +302,12 @@ def edit(
     entry = read_entry(path)
     if not (entry.content or "").strip():
         exit_error("Entry body is empty. Use `koda remove` to delete an entry.", style="yellow")
-    # Identity is stable across edits; restore any machine field the user cleared.
     entry.uid = row.uid
     if not entry.created_at:
         entry.created_at = row.created_at
     if entry.idx is None:
         entry.idx = row.idx
-    entry.modified_at = _now()  # an edit is a review → bump modified, re-bless
+    entry.modified_at = now_str()
     write_entry(get_entries_dir(), entry, path=path)
     sync_path(get_db(), get_entries_dir(), path, blessed=True)
     if not quiet:
@@ -367,29 +322,12 @@ def _emit_list_json(
     sort_by: str | None,
     desc: bool | None,
 ) -> None:
-    """Print all matching entries as a JSON array (no paging)."""
     init_db()
-    if sort_by is None:
-        sort_by = get_config().list_sort_by
-    if desc is None:
-        desc = get_config().list_desc
-    normalized_sort = sort_by.lower()
-    if normalized_sort not in VALID_SORT_COLUMNS:
-        valid = ", ".join(sorted(VALID_SORT_COLUMNS))
-        exit_error(f"Invalid --sort-by '{sort_by}'. Use one of: {valid}.")
+    sort_col, desc = resolve_sort(sort_by, desc)
     rows = get_db().get_memos(
-        query,
-        tag,
-        exclude_tag,
-        shortcuts_only,
-        limit=None,
-        sort_by=normalized_sort,
-        desc=desc,
+        query, tag, exclude_tag, shortcuts_only, limit=None, sort_by=sort_col, desc=desc
     )
     sys.stdout.write(json.dumps([r.to_dict() for r in rows], ensure_ascii=False, indent=2) + "\n")
-
-
-_DISPLAY_MODES = ("title", "body", "full", "both")
 
 
 def _build_content_cell(
@@ -398,7 +336,6 @@ def _build_content_cell(
     rows_value: int | None,
     truncate: int,
 ) -> Text | str:
-    """Build the Rich renderable for the content column based on display_mode."""
     content_lines = (memo.content or "").splitlines()
 
     def _preview_lines() -> list[str]:
@@ -427,7 +364,6 @@ def _build_content_cell(
             cell = Text()
             cell.append(memo.title, style="bold")
             return cell
-        # Fallback: body preview (same as body mode)
         return "\n".join(_preview_lines())
 
     if display_mode == "full":
@@ -475,10 +411,7 @@ def _list_memos_impl(
         per_page = get_config().list_per_page
     elif per_page < 1:
         exit_error("--per-page must be >= 1.")
-    if sort_by is None:
-        sort_by = get_config().list_sort_by
-    if desc is None:
-        desc = get_config().list_desc
+    sort_col, desc = resolve_sort(sort_by, desc)
     if rows is None:
         rows = str(get_config().list_rows)
     if truncate is None:
@@ -487,11 +420,6 @@ def _list_memos_impl(
         exit_error("--truncate must be 0 or greater.")
     if display is None:
         display = get_config().list_display
-
-    normalized_sort = sort_by.lower()
-    if normalized_sort not in VALID_SORT_COLUMNS:
-        valid = ", ".join(sorted(VALID_SORT_COLUMNS))
-        exit_error(f"Invalid --sort-by '{sort_by}'. Use one of: {valid}.")
 
     rows_value: int | None
     try:
@@ -522,7 +450,7 @@ def _list_memos_impl(
         shortcuts_only,
         limit=per_page,
         offset=offset,
-        sort_by=normalized_sort,
+        sort_by=sort_col,
         desc=desc,
     )
     if not memos:
@@ -594,10 +522,7 @@ def list_memos(
         "--sort-by",
         "-b",
         case_sensitive=False,
-        help=(
-            "Sort column: id, idx, uid, tags, content, created_at, modified_at, shortcut. "
-            "[config: list.sort_by]"
-        ),
+        help=SORT_HELP,
     ),
     desc: bool | None = typer.Option(
         None,
@@ -650,8 +575,8 @@ def list_memos(
     parsed_display: str | None = None
     if display is not None:
         parsed_display = display.strip().lower()
-        if parsed_display not in _DISPLAY_MODES:
-            exit_error(f"Invalid --display {display!r}. Use one of: title, body, full, both.")
+        if parsed_display not in DISPLAY_MODES:
+            exit_error(f"Invalid --display {display!r}. Use one of: {', '.join(DISPLAY_MODES)}.")
     _list_memos_impl(
         query,
         tag,
@@ -680,28 +605,14 @@ def show(
     When no argument is given, this command also accepts one ref from stdin.
     """
     if ref is None:
-        stdin_refs = _read_stdin_refs()
-        if len(stdin_refs) > 1:
-            exit_error("show accepts one ref from stdin. Got multiple values.")
-        if stdin_refs:
-            ref = stdin_refs[0]
+        ref = single_stdin_ref("show")
 
     init_db()
     row = resolve_ref(ref)
     if json_output:
         sys.stdout.write(json.dumps(row.to_dict(), ensure_ascii=False, indent=2) + "\n")
         return
-    _print_memo(
-        row.uid,
-        row.idx,
-        row.shortcut,
-        row.content,
-        row.tags,
-        row.created_at,
-        row.modified_at,
-        row.source,
-        title=row.title,
-    )
+    print_memo(row)
 
 
 @app.command(rich_help_panel="Core")
@@ -717,28 +628,17 @@ def raw(
         None,
         "--var",
         "-V",
-        help=(
-            "Variable substitution. Named: KEY=VALUE → replaces ${KEY}. "
-            "Positional: VALUE → replaces $1,$2,... in order. "
-            'Comma-separate multiple values; use "..." to include spaces or commas. '
-            "Examples: -V 'localhost,5432' -V 'name=prod' -V '\"hello world\",\"foo,bar\"'"
-        ),
+        help=VAR_HELP,
     ),
 ):
     """Print memo body to stdout only (plain text, no Rich). Same as bare `koda <idx>`.
 
     Alias: `koda r`. When no argument is given, refs can also be passed from stdin.
     """
-    refs = entry_refs
-    if not refs:
-        stdin_refs = _read_stdin_refs()
-        refs = stdin_refs or None
-
-    if not refs:
-        emit_raw(None, vars)
-    else:
-        for ref in refs:
-            emit_raw(ref, vars)
+    refs: list[str | None] = list(entry_refs or _read_stdin_refs()) or [None]
+    init_db()
+    for ref in refs:
+        emit_raw(ref, vars)
 
 
 @app.command(rich_help_panel="Core")
@@ -760,7 +660,7 @@ def tag(
     add_list = parse_tag_args(tags)
     remove_list = parse_tag_args(untag)
     entries_dir = get_entries_dir()
-    now = _now()
+    now = now_str()
 
     updated = 0
     added_count = 0
@@ -778,7 +678,7 @@ def tag(
         if new_tags == current:
             continue
         if not dry_run:
-            path = _entry_file(row)
+            path = entry_file(row)
             if path is None or not path.exists():
                 console.print(f"[yellow]No file for index {idx}, skipping.[/yellow]")
                 continue
@@ -793,11 +693,9 @@ def tag(
 
     if quiet:
         return
-    entry_word = "entry" if updated == 1 else "entries"
     verb = "Would update" if dry_run else "Updated"
     color = "cyan" if dry_run else "green"
     console.print(
-        f"[{color}]{verb} {updated} {entry_word} "
-        f"(added {added_count} tag{'' if added_count == 1 else 's'}, "
-        f"removed {removed_count} tag{'' if removed_count == 1 else 's'}).[/{color}]"
+        f"[{color}]{verb} {entries(updated)} "
+        f"(added {plural(added_count, 'tag')}, removed {plural(removed_count, 'tag')}).[/{color}]"
     )

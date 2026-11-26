@@ -1,70 +1,25 @@
-"""Local cache over the Markdown entry store.
+"""Disposable SQLite cache over the Markdown entries, plus the local-only trust ledger.
 
-The source of truth is the ``.md`` files under ``<vault>/entries`` (see
-``md_store``). This module is a **disposable, rebuildable SQLite cache** that
-exists only for fast queries and for the local-only trust ledger:
-
-- fast ``list`` / search / sort without parsing every file each run;
-- the ``source`` (local/remote) trust state, which must NOT be synced;
-- ``blessed_hash`` — the content koda last authored/reviewed, so an external
-  edit (Obsidian / AI / git pull) is detected and marked ``source='remote'``.
-
-The cache lives at ``<vault>/.koda/cache.db`` and can be dropped and rebuilt
-from the ``.md`` files at any time (``koda reindex``). ``reconcile`` keeps it in
-sync on every run; nothing here is authoritative.
+Rebuildable from ``entries/*.md`` at any time; nothing here is authoritative.
 """
 
-import hashlib
 import os
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-from .models import MemoRow
-
-# Number of hex chars kept from the sha1 hash to form a uid. 16 hex = 64 bits,
-# chosen so birthday/preimage attacks against the sync merge key are infeasible.
-UID_LENGTH = 16
-
-
-def compute_uid(content: str, created_at: str) -> str:
-    """Return the stable uid: first ``UID_LENGTH`` hex chars of
-    ``sha1(content + created_at)``. Deterministic across machines, so the same
-    entry derives the same uid everywhere. Stored in each ``.md``'s frontmatter
-    as the entry's identity; never recomputed on edit."""
-    raw = f"{content}{created_at}".encode()
-    return hashlib.sha1(raw).hexdigest()[:UID_LENGTH]
-
-
-# Kept as a tuple for a stable ``except IntegrityErrors:`` idiom across the code
-# base (previously spanned sqlite3 + libsql; now sqlite3 only).
-IntegrityErrors: tuple = (sqlite3.IntegrityError,)
-
-
-VALID_SORT_COLUMNS = {
-    "id",
-    "idx",
-    "uid",
-    "tags",
-    "content",
-    "created_at",
-    "modified_at",
-    "shortcut",
-    "title",
-    "description",
-}
+from .models import VALID_SORT_COLUMNS, MemoRow
 
 
 class DatabaseError(RuntimeError):
-    """Cache configuration error (missing path, etc.)."""
+    pass
 
 
-# Bump when the cache schema changes; a mismatch drops and rebuilds the cache
-# (it is derived data, so this is always safe).
+# Bump on schema change; a mismatch drops and rebuilds the cache.
 CACHE_SCHEMA_VERSION = 1
 
-# Projection materialised into a MemoRow (order must match MemoRow fields).
+# Order must match MemoRow fields.
 _MEMO_COLUMNS = (
     "id, uid, idx, content, tags, shortcut, created_at, modified_at, source, title, description"
 )
@@ -91,8 +46,6 @@ _CREATE_TABLE = """
 
 
 class MemoDatabase:
-    """SQLite-backed cache/query layer over the Markdown entry store."""
-
     def __init__(self, path: Path | None = None) -> None:
         self.path = Path(path) if path else None
 
@@ -112,9 +65,6 @@ class MemoDatabase:
             conn.close()
 
     def init_db(self) -> None:
-        """Ensure the cache exists at the current schema version, rebuilding it
-        from scratch on a version mismatch (cache is derived, so dropping is
-        safe; ``reconcile`` repopulates it)."""
         if self.path is not None:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             os.chmod(self.path.parent, 0o700)
@@ -133,21 +83,12 @@ class MemoDatabase:
         if self.path is not None:
             os.chmod(self.path, 0o600)
 
-    def clear(self) -> None:
-        """Drop all cached rows (used by ``reindex`` before a full rescan)."""
-        with self.connection() as conn:
-            conn.execute("DELETE FROM memos")
-
-    # ------------------------------------------------------------------ #
-    # Reads (return MemoRow)
-    # ------------------------------------------------------------------ #
     @staticmethod
     def next_idx(conn) -> int:
         row = conn.execute("SELECT MAX(idx) FROM memos").fetchone()
         return (row[0] + 1) if row[0] is not None else 0
 
     def allocate_idx(self) -> int:
-        """Return the next free display index."""
         with self.connection() as conn:
             return self.next_idx(conn)
 
@@ -248,14 +189,11 @@ class MemoDatabase:
         return MemoRow.from_row(rows[0])
 
     def path_for(self, uid: str) -> str | None:
-        """Return the cached relative ``.md`` path for ``uid`` (or None)."""
         with self.connection() as conn:
             row = conn.execute("SELECT path FROM memos WHERE uid = ?", (uid,)).fetchone()
         return row[0] if row else None
 
     def shortcut_owner(self, shortcut: str, exclude_uid: str | None = None) -> str | None:
-        """Return the uid that currently holds ``shortcut`` (excluding
-        ``exclude_uid``), or None if free."""
         if not shortcut:
             return None
         with self.connection() as conn:
@@ -265,12 +203,13 @@ class MemoDatabase:
                 return uid
         return None
 
-    # ------------------------------------------------------------------ #
-    # Cache mutation / manifest (used by reconcile)
-    # ------------------------------------------------------------------ #
+    def idx_by_uid(self) -> dict[str, int]:
+        with self.connection() as conn:
+            rows = conn.execute("SELECT uid, idx FROM memos").fetchall()
+        return {uid: idx for uid, idx in rows if idx is not None}
+
     def manifest(self) -> dict[str, dict]:
-        """Return ``{uid: {id, path, mtime, body_hash, blessed_hash, source}}``
-        for every cached entry — the reconcile baseline."""
+        """Reconcile baseline: ``{uid: {id, path, mtime, body_hash, blessed_hash, source}}``."""
         with self.connection() as conn:
             rows = conn.execute(
                 "SELECT uid, id, path, mtime, body_hash, blessed_hash, source FROM memos"
@@ -305,7 +244,6 @@ class MemoDatabase:
         body_hash: str,
         blessed_hash: str | None,
     ) -> None:
-        """Insert or update the cache row for ``uid`` (keyed by uid)."""
         with self.connection() as conn:
             conn.execute(
                 """
@@ -339,15 +277,6 @@ class MemoDatabase:
                 ),
             )
 
-    def update_location(self, uid: str, path: str, mtime: float) -> None:
-        """Record a new path/mtime for ``uid`` (a rename detected by reconcile)."""
-        with self.connection() as conn:
-            conn.execute("UPDATE memos SET path = ?, mtime = ? WHERE uid = ?", (path, mtime, uid))
-
     def delete_by_uid(self, uid: str) -> None:
         with self.connection() as conn:
             conn.execute("DELETE FROM memos WHERE uid = ?", (uid,))
-
-    def delete_by_path(self, path: str) -> None:
-        with self.connection() as conn:
-            conn.execute("DELETE FROM memos WHERE path = ?", (path,))

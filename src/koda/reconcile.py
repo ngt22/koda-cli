@@ -1,41 +1,19 @@
-"""Reconcile the Markdown entry store into the local cache.
+"""Reconcile ``entries/*.md`` (truth) into the cache on every run, and detect idx conflicts.
 
-The ``.md`` files under ``<vault>/entries`` are the truth; the SQLite cache is
-derived. ``reconcile_all`` runs on every CLI invocation (mtime-gated, so the
-steady state is just ``stat`` calls) to reflect any external add/edit/delete/
-rename made by Obsidian, an editor, an AI agent, or ``git pull``:
-
-- new/changed file  → upsert into cache, keyed by frontmatter ``uid``;
-- vanished file     → delete from cache;
-- same uid, new path → treated as a rename (path updated, not delete+add).
-
-Trust: a file whose body no longer matches the ``blessed_hash`` koda recorded
-(or a file koda has never authored) is external → ``source='remote'`` and will
-prompt before ``koda x``. koda's own writes go through ``sync_path(blessed=True)``
-which records the new blessed hash → ``source='local'``.
-
-Scope: only top-level ``entries/*.md`` files are scanned — subfolders are not
-recursed into. Organize with tags/frontmatter, not folders; a ``.md`` you file
-into an Obsidian subfolder won't be picked up until it's moved back to
-``entries/``.
+Trust: a body that no longer matches koda's ``blessed_hash`` (or a file koda never wrote)
+becomes ``source='remote'`` and gates ``koda x``. Only top-level ``entries/*.md`` is scanned.
 """
 
-from datetime import datetime
 from pathlib import Path
 
 from .cli_utils import stderr_console
-from .constants import DATETIME_FMT
 from .db import MemoDatabase
 from .md_store import MdEntry, ensure_uid, read_entry, write_entry
+from .models import now_str
 
 
-def _now() -> str:
-    return datetime.now().strftime(DATETIME_FMT)
-
-
-def _normalize(entry: MdEntry, entries_dir: Path, path: Path, now: str, next_idx: int) -> bool:
-    """Fill in machine fields (created/modified/uid/idx) that a hand-created or
-    AI-written file may lack. Returns True if the file must be written back."""
+def _normalize(entry: MdEntry, now: str, next_idx: int) -> bool:
+    """Fill machine fields a hand-written file may lack. True if the file must be rewritten."""
     changed = False
     if not entry.created_at:
         entry.created_at = now
@@ -53,7 +31,6 @@ def _normalize(entry: MdEntry, entries_dir: Path, path: Path, now: str, next_idx
 
 
 def _resolve_source(db: MemoDatabase, entry: MdEntry, manifest: dict) -> tuple[str, str | None]:
-    """Decide (source, blessed_hash) for a discovered/changed file."""
     prior = manifest.get(entry.uid)
     if prior and prior["blessed_hash"] == entry.body_hash:
         return "local", entry.body_hash  # unchanged since koda last blessed it
@@ -65,9 +42,8 @@ def _resolve_source(db: MemoDatabase, entry: MdEntry, manifest: dict) -> tuple[s
 def _upsert(
     db: MemoDatabase, entry: MdEntry, rel: str, mtime: float, source: str, blessed_hash: str | None
 ) -> None:
-    """Upsert one entry into the cache, dropping a shortcut already owned by a
-    different uid (mirrors the old merge's shortcut-conflict handling)."""
-    assert entry.uid is not None  # callers normalize the entry before upserting
+    """Upsert into the cache; a shortcut already owned by another uid is dropped."""
+    assert entry.uid is not None
     shortcut = entry.shortcut
     if shortcut and db.shortcut_owner(shortcut, exclude_uid=entry.uid):
         shortcut = None
@@ -90,13 +66,10 @@ def _upsert(
 
 
 def reconcile_all(db: MemoDatabase, entries_dir: Path, *, force: bool = False) -> None:
-    """Scan ``entries_dir`` → cache. mtime-gated unless ``force`` (which re-parses
-    every file, e.g. ``koda reindex``). ``force`` preserves each entry's trust
-    state, since the blessed hashes stay in the manifest — only a schema-version
-    rebuild (which drops the whole cache) loses them."""
+    """Scan ``entries_dir`` into the cache; mtime-gated unless ``force``. Trust state is kept."""
     manifest = db.manifest()
     by_path = {info["path"]: uid for uid, info in manifest.items()}
-    now = _now()
+    now = now_str()
     next_idx = db.allocate_idx()
 
     seen_uids: set[str] = set()
@@ -118,14 +91,14 @@ def reconcile_all(db: MemoDatabase, entries_dir: Path, *, force: bool = False) -
             and manifest.get(prior_uid, {}).get("mtime") == mtime
             and prior_uid not in seen_uids
         ):
-            seen_uids.add(prior_uid)  # unchanged — but if a same-uid file already
-            continue  # won this scan, fall through so the LAST file wins
+            seen_uids.add(prior_uid)
+            continue
 
         entry = read_entry(path)
-        if _normalize(entry, entries_dir, path, now, next_idx):
+        if _normalize(entry, now, next_idx):
             write_entry(entries_dir, entry, path=path)
             mtime = path.stat().st_mtime
-        assert entry.uid is not None  # _normalize always assigns one
+        assert entry.uid is not None
         if entry.idx is not None and entry.idx >= next_idx:
             next_idx = entry.idx + 1
 
@@ -146,14 +119,11 @@ def reconcile_all(db: MemoDatabase, entries_dir: Path, *, force: bool = False) -
 
 
 def sync_path(db: MemoDatabase, entries_dir: Path, path: Path, *, blessed: bool) -> MdEntry:
-    """Reflect a single ``.md`` file into the cache. ``blessed=True`` marks it as
-    koda-authored/reviewed (``source='local'``, blessed hash updated); otherwise
-    the normal trust logic applies. Returns the parsed entry."""
-    now = _now()
+    """Reflect one file into the cache. ``blessed=True`` marks its current body as reviewed."""
     entry = read_entry(path)
-    if _normalize(entry, entries_dir, path, now, db.allocate_idx()):
+    if _normalize(entry, now_str(), db.allocate_idx()):
         write_entry(entries_dir, entry, path=path)
-    assert entry.uid is not None  # _normalize always assigns one
+    assert entry.uid is not None
     mtime = path.stat().st_mtime
     blessed_hash: str | None
     if blessed:
@@ -164,26 +134,12 @@ def sync_path(db: MemoDatabase, entries_dir: Path, path: Path, *, blessed: bool)
     return entry
 
 
-def remove_path(db: MemoDatabase, path: Path) -> None:
-    """Drop the cache row for a file koda just deleted."""
-    db.delete_by_path(path.name)
-
-
-# --------------------------------------------------------------------------- #
-# idx-conflict detection and sync diff (used by push/pull/resolve)
-# --------------------------------------------------------------------------- #
 def snapshot_idx(db: MemoDatabase) -> dict[str, int]:
-    """Return ``{uid: idx}`` for every cached entry — the sync-diff baseline."""
-    with db.connection() as conn:
-        rows = conn.execute("SELECT uid, idx FROM memos").fetchall()
-    return {uid: idx for uid, idx in rows if idx is not None}
+    return db.idx_by_uid()
 
 
 def compute_sync_diff(before: dict[str, int], after: dict[str, int]) -> dict[str, list]:
-    """Classify a uid→idx change between two snapshots.
-
-    Returns ``{"added": [uid], "removed": [uid], "moved": [(uid, old, new)]}``.
-    """
+    """``{"added": [uid], "removed": [uid], "moved": [(uid, old, new)]}``."""
     added = [uid for uid in after if uid not in before]
     removed = [uid for uid in before if uid not in after]
     moved = [
@@ -195,11 +151,7 @@ def compute_sync_diff(before: dict[str, int], after: dict[str, int]) -> dict[str
 
 
 def find_conflicts(db: MemoDatabase) -> list[dict]:
-    """Return ``[{idx, entries: [entry_dict]}]`` for every idx held by >1 entry.
-
-    Each ``entry_dict`` is JSON-serializable and carries ``side``/``prev_idx``
-    placeholders (filled by :func:`annotate_groups`).
-    """
+    """``[{idx, entries: [entry_dict]}]`` for every idx held by more than one entry."""
     by_idx: dict[int, list] = {}
     for row in db.get_memos(sort_by="idx"):
         by_idx.setdefault(row.idx, []).append(row)
@@ -227,10 +179,7 @@ def find_conflicts(db: MemoDatabase) -> list[dict]:
 
 
 def annotate_groups(groups: list[dict], before: dict[str, int]) -> list[dict]:
-    """Attach ``side``/``prev_idx`` to each conflict entry given the pre-pull
-    ``{uid: idx}`` snapshot. ``ours`` = held this idx before; ``theirs`` =
-    incoming (brand-new, or moved from a different idx). Mutates and returns
-    ``groups``."""
+    """Mark each entry ``ours`` (held this idx in ``before``) or ``theirs``. Mutates ``groups``."""
     for group in groups:
         idx = group["idx"]
         for e in group["entries"]:

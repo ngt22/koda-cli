@@ -8,7 +8,7 @@ singletons the ``vault`` fixture already wired.
 
 import koda.runtime as runtime
 from koda import md_store, reconcile
-from koda.db import compute_uid
+from koda.models import compute_uid
 
 
 def put_entry(

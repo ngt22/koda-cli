@@ -1,19 +1,18 @@
-"""Store-management commands: migrate (legacy SQLite → Markdown), reindex."""
+"""Store management: migrate (legacy SQLite → Markdown), reindex."""
 
 import sqlite3
 from pathlib import Path
 
 import typer
 
-from ..cli_utils import exit_error
+from ..cli_utils import entries, exit_error, plural
 from ..config import LEGACY_DB_PATH
-from ..db import compute_uid
 from ..main import app
 from ..md_store import MdEntry, write_entry
+from ..models import compute_uid
 from ..reconcile import reconcile_all
 from ..runtime import console, get_db, get_entries_dir, init_db
 
-# Columns a legacy koda.db might have; older versions lack title/source.
 _LEGACY_BASE_COLS = ["uid", "idx", "content", "tags", "shortcut", "created_at", "modified_at"]
 
 
@@ -26,11 +25,7 @@ def migrate(
         False, "--force", "-f", help="Migrate even if the vault already has entries."
     ),
 ):
-    """One-time migration: write one Markdown file per row of a legacy koda.db.
-
-    koda 2.x stores entries as ``entries/*.md``; this reads your old SQLite
-    database and materialises each row as a file, then builds the cache.
-    """
+    """One-time migration: write one Markdown file per row of a legacy SQLite koda.db."""
     init_db()
     entries_dir = get_entries_dir()
     src = Path(db_path).expanduser()
@@ -86,9 +81,7 @@ def migrate(
         _record_skipped(skipped)
 
     reconcile_all(get_db(), entries_dir, force=True)
-    console.print(
-        f"[green]Migrated {count} entr{'y' if count == 1 else 'ies'} to {entries_dir}.[/green]"
-    )
+    console.print(f"[green]Migrated {entries(count)} to {entries_dir}.[/green]")
     for s in skipped:
         console.print(
             f"[yellow]Skipped {s['uid']}[/yellow] "
@@ -97,14 +90,10 @@ def migrate(
         )
     if skipped:
         console.print(
-            f"[dim]Skipped {len(skipped)} duplicate entr{'y' if len(skipped) == 1 else 'ies'} "
-            f"recorded as a koda entry (tag: migrate).[/dim]\n"
-            f"[dim]Open {get_entries_dir().parent} in Obsidian, or `koda list` to verify.[/dim]"
+            f"[dim]Skipped {plural(len(skipped), 'duplicate entry', 'duplicate entries')} "
+            "recorded as a koda entry (tag: migrate).[/dim]"
         )
-    else:
-        console.print(
-            f"[dim]Open {get_entries_dir().parent} in Obsidian, or `koda list` to verify.[/dim]"
-        )
+    console.print(f"[dim]Open {entries_dir.parent} in Obsidian, or `koda list` to verify.[/dim]")
 
 
 def _record_skipped(skipped: list[dict]) -> None:
@@ -123,20 +112,14 @@ def _record_skipped(skipped: list[dict]) -> None:
             f"| {s['uid']} | {s['idx'] if s['idx'] is not None else ''} | "
             f"{s['shortcut'] or ''} | {s['title'] or ''} |"
         )
-    title = f"migrate: skipped {len(skipped)} duplicate entr{'y' if len(skipped) == 1 else 'ies'}"
+    title = f"migrate: skipped {plural(len(skipped), 'duplicate entry', 'duplicate entries')}"
     _write_new_entry("\n".join(lines), tags="migrate", shortcut=None, title=title)
 
 
 @app.command(rich_help_panel="Data")
 def reindex():
-    """Rebuild the cache from the Markdown files (re-parses every entry).
-
-    Use if the cache looks stale or inconsistent. Trust state (local/remote) is
-    preserved. The ``.md`` files are the source of truth, so this never loses
-    data.
-    """
-    init_db()
-    entries_dir = get_entries_dir()
-    reconcile_all(get_db(), entries_dir, force=True)
+    """Rebuild the cache by re-parsing every ``.md`` (trust state is kept)."""
+    get_db().init_db()
+    reconcile_all(get_db(), get_entries_dir(), force=True)
     total = get_db().get_memo_stats()[0]
-    console.print(f"[green]Reindexed {total} entr{'y' if total == 1 else 'ies'}.[/green]")
+    console.print(f"[green]Reindexed {entries(total)}.[/green]")

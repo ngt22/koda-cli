@@ -8,7 +8,7 @@ trust ledger (``source`` local/remote + ``blessed_hash``).
 import koda.runtime as runtime
 from koda import md_store
 from koda.md_store import MdEntry, read_entry, write_entry
-from koda.reconcile import reconcile_all, remove_path, sync_path
+from koda.reconcile import reconcile_all, sync_path
 
 
 def _entries_dir():
@@ -81,14 +81,6 @@ def test_file_deletion_removes_cache_row(db, seed):
     path.unlink()
 
     reconcile_all(db, _entries_dir())
-    assert db.get_memo_by_uid(row.uid) is None
-
-
-def test_remove_path_drops_cache_row(db, seed):
-    row = seed("gone")
-    path = _entries_dir() / db.path_for(row.uid)
-    path.unlink()
-    remove_path(db, path)
     assert db.get_memo_by_uid(row.uid) is None
 
 

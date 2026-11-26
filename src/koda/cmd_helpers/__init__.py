@@ -1,1 +1,1 @@
-"""CLI helpers split by concern: display, interactive, metadata, parsing."""
+"""CLI helpers split by concern: display, interactive, parsing."""

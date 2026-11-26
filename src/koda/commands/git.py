@@ -1,11 +1,4 @@
-"""Git sync commands: push, pull.
-
-The vault (``~/.koda-cli``) is itself a git repository and the ``entries/*.md``
-files are the synced artifact — so sync is just git on plain files. ``push``
-commits and pushes the entries; ``pull`` rebases and then reconciles the cache.
-No JSONL payload, no bespoke merge: concurrent edits to the same entry surface
-as ordinary git conflicts on that one file.
-"""
+"""Git sync (push, pull, diff): plain git on the vault's ``entries/*.md``."""
 
 import shutil
 import subprocess
@@ -27,10 +20,7 @@ from ..reconcile import (
 )
 from ..runtime import console, get_db, get_entries_dir, get_vault, init_db
 
-# Kept out of sync: the local cache/trust ledger, and Obsidian's per-machine app
-# state (workspace, plugins) which would otherwise churn and conflict across
-# machines. Users who deliberately want to sync Obsidian config can remove the
-# line from their vault's .gitignore.
+# Local cache/trust ledger and per-machine Obsidian state never sync.
 _GITIGNORE_LINES = (".koda/", ".obsidian/")
 
 
@@ -50,8 +40,6 @@ def _is_repo(vault: Path) -> bool:
 
 
 def _ensure_repo(vault: Path) -> None:
-    """Make the vault a git repo (first run) and keep the cache and Obsidian
-    app-state git-ignored."""
     vault.mkdir(parents=True, exist_ok=True)
     if not _is_repo(vault):
         _git(vault, "init")
@@ -86,8 +74,6 @@ def _has_upstream(vault: Path) -> bool:
 
 
 def _git_or_exit(vault: Path, *args: str, hint: str = "") -> subprocess.CompletedProcess:
-    """Run a git command, exiting cleanly with git's own message (plus an optional
-    hint) instead of raising a raw traceback when it fails."""
     result = _git(vault, *args, check=False)
     if result.returncode != 0:
         message = (result.stderr or result.stdout or "").strip()
@@ -96,35 +82,43 @@ def _git_or_exit(vault: Path, *args: str, hint: str = "") -> subprocess.Complete
     return result
 
 
-_PUSH_HINT = (
-    "The remote has commits your vault does not. Run `koda pull` to merge them "
-    "first, or overwrite the remote with this vault via "
-    "`git -C ~/.koda-cli push --force origin <branch>` (discards the remote's history)."
-)
-_REBASE_HINT = (
-    "Resolve the conflicts in ~/.koda-cli, then `git -C ~/.koda-cli rebase --continue` "
-    "(or `git -C ~/.koda-cli rebase --abort` to back out)."
-)
+def _push_hint(vault: Path) -> str:
+    return (
+        "The remote has commits your vault does not. Run `koda pull` to merge them "
+        "first, or overwrite the remote with this vault via "
+        f"`git -C {vault} push --force origin <branch>` (discards the remote's history)."
+    )
+
+
+def _rebase_hint(vault: Path) -> str:
+    return (
+        f"Resolve the conflicts in {vault}, then `git -C {vault} rebase --continue` "
+        f"(or `git -C {vault} rebase --abort` to back out)."
+    )
 
 
 def _pull_rebase_if_remote(vault: Path) -> None:
     if _has_remote(vault) and _has_upstream(vault):
-        _git_or_exit(vault, "pull", "--rebase", hint=_REBASE_HINT)
+        _git_or_exit(vault, "pull", "--rebase", hint=_rebase_hint(vault))
 
 
 def _push_if_remote(vault: Path) -> None:
     if not _has_remote(vault):
         console.print(
             "[yellow]No git remote configured — committed locally only.[/yellow]\n"
-            "[dim]Add one with `git -C ~/.koda-cli remote add origin <url>`, then push again.[/dim]"
+            f"[dim]Add one with `git -C {vault} remote add origin <url>`, then push again.[/dim]"
         )
         return
     if _has_upstream(vault):
-        _git_or_exit(vault, "push", hint=_PUSH_HINT)
+        _git_or_exit(vault, "push", hint=_push_hint(vault))
     else:
-        # First push: create the upstream branch (mirrors the old sync helper).
         _git_or_exit(
-            vault, "push", "-u", _first_remote(vault), _current_branch(vault), hint=_PUSH_HINT
+            vault,
+            "push",
+            "-u",
+            _first_remote(vault),
+            _current_branch(vault),
+            hint=_push_hint(vault),
         )
 
 
@@ -156,25 +150,23 @@ def _report_sync(diff: dict) -> None:
         console.print(f"  [yellow]{old} → {new}[/yellow] {uid}")
 
 
-def _existing_conflicts(vault: Path, db) -> list[dict]:
-    """Return unresolved conflicts already present locally (from the ledger, or
-    freshly detected on disk), annotating and persisting the latter."""
+def _exit_if_unresolved(vault: Path, db) -> None:
+    """Exit if conflicts are recorded in the ledger or present on disk (recording the latter)."""
     groups = load_conflicts(vault)
+    if not groups:
+        groups = find_conflicts(db)
+        if groups:
+            annotate_groups(groups, snapshot_idx(db))
+            save_conflicts(vault, groups)
     if groups:
-        return groups
-    groups = find_conflicts(db)
-    if groups:
-        annotate_groups(groups, snapshot_idx(db))
-        save_conflicts(vault, groups)
-    return groups
+        exit_error(
+            "Unresolved idx conflicts present — run `koda resolve` first.",
+            code=ExitCode.CONFLICT,
+        )
 
 
 def _reconcile_after_pull(vault: Path, db, before: dict[str, int]) -> tuple[dict, list[dict]]:
-    """Reconcile the cache after a pull, then detect/record new conflicts.
-
-    Returns ``(diff, groups)`` where ``diff`` classifies added/removed/moved and
-    ``groups`` is the list of freshly recorded conflict groups (``[]`` if none).
-    """
+    """Reconcile after a pull; return ``(diff, new_conflict_groups)``."""
     reconcile_all(db, get_entries_dir())
     after = snapshot_idx(db)
     diff = compute_sync_diff(before, after)
@@ -186,11 +178,7 @@ def _reconcile_after_pull(vault: Path, db, before: dict[str, int]) -> tuple[dict
 
 
 def _classify_changes(status_output: str) -> dict[str, str]:
-    """Map `git status --porcelain` output → {path: 'new'|'updated'|'deleted'}.
-
-    Renames are reported under their new path as 'updated'; anything else
-    (typechange etc.) is treated as 'updated' too.
-    """
+    """``git status --porcelain`` → ``{path: 'new'|'updated'|'deleted'}`` (renames: new path)."""
     result: dict[str, str] = {}
     for line in status_output.splitlines():
         if not line:
@@ -207,14 +195,7 @@ def _classify_changes(status_output: str) -> dict[str, str]:
     return result
 
 
-def _preview_push(vault: Path) -> None:
-    """Read-only preview for `koda push -n`: what would be committed and pushed.
-
-    Never stages, commits, pushes, or pulls --rebase; the only network call is
-    a read-only `git fetch` (mirrors `pull -n`).
-    """
-    if not _is_repo(vault):
-        exit_error("Vault is not a git repository yet. Run `koda push` first.")
+def _local_changes(vault: Path) -> dict[str, str]:
     status = _git(
         vault,
         "-c",
@@ -224,11 +205,53 @@ def _preview_push(vault: Path) -> None:
         "--untracked-files=all",
         check=False,
     ).stdout
-    changes = _classify_changes(status)
+    return _classify_changes(status)
+
+
+def _incoming_changes(vault: Path) -> dict[str, str]:
+    if not _has_upstream(vault):
+        return {}
+    name_status = _git(
+        vault,
+        "-c",
+        "core.quotepath=false",
+        "diff",
+        "--name-status",
+        "HEAD",
+        "@{u}",
+        "--",
+        "entries/",
+        check=False,
+    ).stdout
+    kinds = {"A": "new", "M": "updated", "R": "updated", "D": "deleted"}
+    result: dict[str, str] = {}
+    for line in name_status.splitlines():
+        parts = line.split("\t")
+        if parts and parts[0] and parts[0][0] in kinds:
+            result[parts[-1]] = kinds[parts[0][0]]
+    return result
+
+
+def _print_changes(changes: dict[str, str]) -> None:
+    for kind in ("new", "updated", "deleted"):
+        for path in sorted(p for p, k in changes.items() if k == kind):
+            console.print(f"  {kind:<8} {path}")
+
+
+def _require_synced_repo(vault: Path) -> None:
+    if not _is_repo(vault):
+        exit_error("Vault is not a git repository yet. Run `koda push` first.")
+    if not _has_remote(vault):
+        exit_error("No git remote configured for the vault.")
+
+
+def _preview_push(vault: Path) -> None:
+    """``koda push -n``: read-only; the only network call is ``git fetch``."""
+    if not _is_repo(vault):
+        exit_error("Vault is not a git repository yet. Run `koda push` first.")
+    changes = _local_changes(vault)
     if changes:
-        for kind, label in (("new", "new"), ("updated", "updated"), ("deleted", "deleted")):
-            for path in sorted(p for p, k in changes.items() if k == kind):
-                console.print(f"  {label:<8} {path}")
+        _print_changes(changes)
         console.print(f"[dim]{len(changes)} change(s) would be committed.[/dim]")
     else:
         console.print("[yellow]No entry changes — nothing to push.[/yellow]")
@@ -256,7 +279,7 @@ def push(
         help="Preview what a push would commit and push, without writing anything.",
     ),
 ):
-    """Commit the vault's Markdown entries and push to the git remote. Alias: `koda push`."""
+    """Commit the vault's Markdown entries and push to the git remote."""
     init_db()
     vault = get_vault()
     db = get_db()
@@ -265,31 +288,12 @@ def push(
         _preview_push(vault)
         return
     _ensure_repo(vault)
+    _exit_if_unresolved(vault, db)
 
-    if _existing_conflicts(vault, db):
-        exit_error(
-            "Unresolved idx conflicts present — run `koda resolve` first.",
-            code=ExitCode.CONFLICT,
-        )
-
-    # Commit local changes first so `git pull --rebase` has a clean tree
-    # (koda resolve / edit / move / swap rewrite tracked files).
-    try:
-        _git(vault, "add", "-A")
-    except subprocess.CalledProcessError as e:
-        console.print("[red]git add failed. Resolve issues in the vault and retry.[/red]")
-        if e.stderr:
-            console.print(f"[dim]{e.stderr.strip()}[/dim]")
-        raise typer.Exit(code=1)
-
+    # Commit first so `pull --rebase` sees a clean tree.
+    _git_or_exit(vault, "add", "-A")
     if _git(vault, "diff", "--cached", "--quiet", check=False).returncode != 0:
-        try:
-            _git(vault, "commit", "-m", "koda: sync entries")
-        except subprocess.CalledProcessError as e:
-            console.print("[red]git commit failed. Resolve issues in the vault and retry.[/red]")
-            if e.stderr:
-                console.print(f"[dim]{e.stderr.strip()}[/dim]")
-            raise typer.Exit(code=1)
+        _git_or_exit(vault, "commit", "-m", "koda: sync entries")
 
     before = snapshot_idx(db)
     _pull_rebase_if_remote(vault)
@@ -313,20 +317,12 @@ def pull(
         False, "--dry-run", "-n", help="Fetch and show incoming changes without applying them."
     ),
 ):
-    """Pull Markdown entries from the git remote and reconcile the cache. Alias: `koda pull`.
-
-    Entries changed by the pull are detected as external edits and marked
-    source=remote, so `koda x` prompts before running them until you review with
-    `koda edit`.
-    """
+    """Pull entries from the git remote; changed entries become source=remote until reviewed."""
     init_db()
     vault = get_vault()
     db = get_db()
     _require_git()
-    if not _is_repo(vault):
-        exit_error("Vault is not a git repository yet. Run `koda push` first.")
-    if not _has_remote(vault):
-        exit_error("No git remote configured for the vault.")
+    _require_synced_repo(vault)
 
     if dry_run:
         _git(vault, "fetch", check=False)
@@ -337,11 +333,7 @@ def pull(
         console.print(diff or "[green]Up to date with the remote.[/green]")
         return
 
-    if _existing_conflicts(vault, db):
-        exit_error(
-            "Unresolved idx conflicts present — run `koda resolve` first.",
-            code=ExitCode.CONFLICT,
-        )
+    _exit_if_unresolved(vault, db)
 
     before = snapshot_idx(db)
     _pull_rebase_if_remote(vault)
@@ -361,56 +353,15 @@ def pull(
 
 @app.command(rich_help_panel="Git sync")
 def diff():
-    """Read-only pre-sync check: local vs remote changes with action hints.
-
-    Shows what ``koda push`` would publish and what ``koda pull`` would bring
-    in. Never writes to the vault (no pull --rebase, no commit, no push).
-    """
+    """Read-only: what `koda push` would publish and `koda pull` would bring in."""
     init_db()
     vault = get_vault()
     _require_git()
-    if not _is_repo(vault):
-        exit_error("Vault is not a git repository yet. Run `koda push` first.")
-    if not _has_remote(vault):
-        exit_error("No git remote configured for the vault.")
+    _require_synced_repo(vault)
 
     _git(vault, "fetch", check=False)
-    local = _classify_changes(
-        _git(
-            vault,
-            "-c",
-            "core.quotepath=false",
-            "status",
-            "--porcelain",
-            "--untracked-files=all",
-            check=False,
-        ).stdout
-    )
-    pulled: dict[str, str] = {}
-    if _has_upstream(vault):
-        name_status = _git(
-            vault,
-            "-c",
-            "core.quotepath=false",
-            "diff",
-            "--name-status",
-            "HEAD",
-            "@{u}",
-            "--",
-            "entries/",
-            check=False,
-        ).stdout
-        for line in name_status.splitlines():
-            parts = line.split("\t")
-            if not parts:
-                continue
-            code, path = parts[0][0], parts[-1]
-            if code == "A":
-                pulled[path] = "new"
-            elif code in ("M", "R"):
-                pulled[path] = "updated"
-            elif code == "D":
-                pulled[path] = "deleted"
+    local = _local_changes(vault)
+    pulled = _incoming_changes(vault)
 
     if not local and not pulled:
         console.print("[green]In sync with the remote.[/green]")
@@ -418,14 +369,10 @@ def diff():
 
     if local:
         console.print("Local changes — would be pushed with `koda push`:")
-        for kind, label in (("new", "new"), ("updated", "updated"), ("deleted", "deleted")):
-            for path in sorted(p for p, k in local.items() if k == kind):
-                console.print(f"  {label:<8} {path}")
+        _print_changes(local)
     if pulled:
         console.print("Remote changes — would be pulled with `koda pull`:")
-        for kind, label in (("new", "new"), ("updated", "updated"), ("deleted", "deleted")):
-            for path in sorted(p for p, k in pulled.items() if k == kind):
-                console.print(f"  {label:<8} {path}")
+        _print_changes(pulled)
 
     console.print(
         f"[cyan]{len(local)} change(s) would be pushed · "

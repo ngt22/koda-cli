@@ -1,4 +1,4 @@
-"""Config management for koda: defaults, TOML I/O, validation, env overrides."""
+"""Config: defaults < TOML file < env, with validation."""
 
 import json
 import os
@@ -6,7 +6,6 @@ import shutil
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -15,28 +14,18 @@ if sys.version_info >= (3, 11):
 else:  # Python 3.10 has no stdlib tomllib; fall back to the tomli backport.
     import tomli as tomllib
 
-from rich.console import Console
+from .cli_utils import stderr_console
+from .models import VALID_SORT_COLUMNS
 
-from .db import VALID_SORT_COLUMNS
-
-console = Console()
-
-
-# The vault: a directory koda owns, holding the Markdown entries and the
-# derived cache. The user points Obsidian / their editor at this directory.
 DEFAULT_VAULT_DIR = Path.home() / ".koda-cli"
 
-# Legacy SQLite location (koda <= 1.x); read only by `koda migrate`.
+# Pre-Markdown SQLite store; read only by `koda migrate`.
 LEGACY_DB_PATH = Path.home() / ".local" / "share" / "koda" / "koda.db"
 
 DEFAULT_CONFIG_DIR = Path(os.getenv("XDG_CONFIG_HOME", Path.home() / ".config")) / "koda"
 DEFAULT_CONFIG_PATH = DEFAULT_CONFIG_DIR / "config.toml"
 CONFIG_PATH = Path(os.getenv("KODA_CONFIG_PATH", DEFAULT_CONFIG_PATH))
 
-
-# VALID_SORT_COLUMNS is owned by db.py (it lists the DB columns that may appear
-# in an ORDER BY); re-exported here so config validators and callers that import
-# from koda.config keep working without reaching into the db layer.
 VALID_LIST_COLUMNS = ["idx", "uid", "sc", "tags", "title", "content", "created_at"]
 REQUIRED_LIST_COLUMNS = {"idx"}
 
@@ -53,13 +42,11 @@ COLUMN_DEFS: dict = {
 
 EXEC_SHELL_ALLOWLIST = ("sh", "bash", "zsh", "fish")
 
-
-# Commented-out scaffold written to a fresh config file by `koda config edit`.
 EXAMPLE_TEMPLATE = (
     "# Koda configuration\n"
     "# Uncomment and edit values to override defaults.\n\n"
     "# [defaults]\n"
-    '# cmd = "raw"      # "raw" or "list"\n\n'
+    '# cmd = "raw"      # raw | list | show | add\n\n'
     "# [list]\n"
     "# per_page = 20\n"
     "# rows = 1         # 0 = all lines\n"
@@ -81,9 +68,7 @@ EXAMPLE_TEMPLATE = (
 
 PATH_OVERRIDE_ENV = "KODA_DB_PATH_OVERRIDE"
 
-# Sensitive dot-dirs under $HOME that vault.path must not point at (or into) —
-# koda writes entries/*.md, a .gitignore, and inits a git repo, any of which
-# could clobber credentials/keys if the vault were pointed here.
+# vault.path must not point into these: koda writes files and runs git init there.
 _HOME_DENYLIST = (
     ".ssh",
     ".gnupg",
@@ -97,12 +82,7 @@ _HOME_DENYLIST = (
 
 
 def vault_path_allowed(v: Any) -> bool:
-    """True if ``v`` is a safe vault directory. koda creates ``entries/*.md`` and
-    a ``.koda`` cache inside it, so a tampered config/env must not point it at a
-    sensitive system location. Allowed: any path under ``$HOME`` that isn't a
-    known sensitive dot-dir (``~/.ssh``, ``~/.aws``, ...) or inside one. The
-    ``KODA_DB_PATH_OVERRIDE`` env var (truthy) lifts the restriction for CI and
-    tests that use a temp location."""
+    """Under $HOME and outside sensitive dot-dirs, unless the override env var is set."""
     if os.getenv(PATH_OVERRIDE_ENV):
         return True
     if not isinstance(v, str) or not v.strip():
@@ -120,9 +100,7 @@ def vault_path_allowed(v: Any) -> bool:
 
 
 def valid_exec_shell(v: Any) -> bool:
-    """True if ``v`` names an allowlisted shell that resolves to an existing
-    absolute executable. Guards `koda x` against arbitrary-binary redirection
-    via a tampered config (e.g. exec.shell = '/tmp/evil')."""
+    """Allowlisted shell name that resolves to an absolute executable (blocks exec.shell hijack)."""
     if not isinstance(v, str) or not v.strip():
         return False
     if Path(v).name not in EXEC_SHELL_ALLOWLIST:
@@ -143,13 +121,7 @@ _TOML_STR_ESCAPES = {
 
 
 def toml_basic_string(value: str) -> str:
-    """Quote ``value`` as a TOML basic string with proper escaping.
-
-    Without this, a value containing ``"`` or a newline could break out of its
-    string and inject arbitrary TOML keys/tables when written back to the config
-    file (e.g. forcing ``exec.confirm_remote = false``). Escaping ``\\`` and
-    ``"`` plus all control characters closes that injection vector and keeps the
-    value round-trippable by ``tomllib``."""
+    """Escaped TOML basic string; prevents key injection via ``"`` or newlines."""
     out = []
     for ch in value:
         if ch in _TOML_STR_ESCAPES:
@@ -161,17 +133,12 @@ def toml_basic_string(value: str) -> str:
     return '"' + "".join(out) + '"'
 
 
-class DefaultCmd(str, Enum):
-    RAW = "raw"
-    LIST = "list"
-    SHOW = "show"
-    ADD = "add"
+DEFAULT_CMDS = ("raw", "list", "show", "add")
+DISPLAY_MODES = ("title", "body", "full", "both")
 
 
 @dataclass
 class Config:
-    """Typed snapshot of resolved configuration (defaults < file < env)."""
-
     defaults_cmd: str = "raw"
     list_per_page: int = 20
     list_rows: int = 1
@@ -183,11 +150,6 @@ class Config:
     vault_path: str = str(DEFAULT_VAULT_DIR)
     exec_shell: str = "sh"
     exec_confirm_remote: bool = True
-
-
-def _dotkey(field_name: str) -> str:
-    section, _, key = field_name.partition("_")
-    return f"{section}.{key}"
 
 
 def _attr(dotkey: str) -> str:
@@ -204,7 +166,7 @@ class FieldSpec:
 _FIELD_SPECS: dict[str, FieldSpec] = {
     "defaults.cmd": FieldSpec(
         str,
-        lambda v: v in tuple(c.value for c in DefaultCmd),
+        lambda v: v in DEFAULT_CMDS,
         "must be 'raw', 'list', 'show', or 'add'",
     ),
     "list.per_page": FieldSpec(int, lambda v: v >= 1, "must be >= 1"),
@@ -228,7 +190,7 @@ _FIELD_SPECS: dict[str, FieldSpec] = {
     ),
     "list.display": FieldSpec(
         str,
-        lambda v: v in ("title", "body", "full", "both"),
+        lambda v: v in DISPLAY_MODES,
         "must be one of: title, body, full, both",
     ),
     "vault.path": FieldSpec(
@@ -256,17 +218,15 @@ _ENV_OVERRIDES: list[tuple[str, str, Callable[[str], Any]]] = [
 
 
 class ValidationError(ValueError):
-    """Raised by ConfigManager.validate / coerce on invalid input."""
+    pass
 
 
 class ConfigManager:
-    """Load, save, and validate koda configuration."""
-
     def __init__(self, config_path: Path = CONFIG_PATH) -> None:
         self.config_path = config_path
 
     def load(self) -> tuple[Config, dict[str, str]]:
-        """Return (Config, source_map). source_map[dotkey] = 'default'|'file'|'env'."""
+        """Return ``(Config, {dotkey: 'default'|'file'|'env'})``."""
         cfg = Config()
         sources: dict[str, str] = {k: "default" for k in ALL_KEYS}
 
@@ -283,7 +243,7 @@ class ConfigManager:
                             setattr(cfg, _attr(dotkey), val)
                             sources[dotkey] = "file"
             except Exception as e:
-                console.print(f"[yellow]Warning: could not read config: {e}[/yellow]")
+                stderr_console.print(f"[yellow]Warning: could not read config: {e}[/yellow]")
 
         for dotkey, env_var, transform in _ENV_OVERRIDES:
             env_value = os.getenv(env_var)
@@ -294,7 +254,6 @@ class ConfigManager:
         return cfg, sources
 
     def read_raw(self) -> dict:
-        """Read the config file as-is (no merging with defaults). Returns {} if absent."""
         if not self.config_path.exists():
             return {}
         try:
@@ -304,7 +263,6 @@ class ConfigManager:
             raise ValidationError(f"Could not read config file: {e}") from e
 
     def write_raw(self, data: dict) -> None:
-        """Serialize data to TOML and write to config_path."""
         self.config_path.parent.mkdir(parents=True, exist_ok=True)
         os.chmod(self.config_path.parent, 0o700)
         lines: list[str] = []
@@ -326,7 +284,6 @@ class ConfigManager:
 
     @staticmethod
     def coerce(key: str, raw: str) -> Any:
-        """Convert raw string from CLI/env to the field's typed value."""
         spec = _FIELD_SPECS.get(key)
         typ = spec.type if spec else str
         try:
@@ -349,7 +306,6 @@ class ConfigManager:
 
     @staticmethod
     def validate(key: str, value: Any) -> Any:
-        """Return value if valid; otherwise raise ValidationError."""
         spec = _FIELD_SPECS.get(key)
         if spec is None or spec.validator is None:
             return value
@@ -359,25 +315,13 @@ class ConfigManager:
 
     @staticmethod
     def default_for(key: str) -> Any:
-        """Return the default value for a dotted key (used by `koda config unset`)."""
         return getattr(Config(), _attr(key))
 
     @staticmethod
     def error_message(key: str) -> str:
-        """Return the human-readable validation error string for a dotted key."""
         spec = _FIELD_SPECS.get(key)
         return spec.error if spec else ""
 
     @staticmethod
     def get(cfg: Config, key: str) -> Any:
         return getattr(cfg, _attr(key))
-
-
-def config_defaults_dict() -> dict[str, dict[str, Any]]:
-    """Build the nested {section: {key: default}} dict from Config()."""
-    out: dict[str, dict[str, Any]] = {}
-    cfg = Config()
-    for dotkey in ALL_KEYS:
-        section, _, key = dotkey.partition(".")
-        out.setdefault(section, {})[key] = getattr(cfg, _attr(dotkey))
-    return out

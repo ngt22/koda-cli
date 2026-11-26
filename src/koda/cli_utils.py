@@ -1,4 +1,4 @@
-"""CLI utilities: standardized error exits and confirmation prompts."""
+"""Consoles, exit codes, error exits and prompts."""
 
 import sys
 from enum import IntEnum
@@ -20,27 +20,25 @@ class ExitCode(IntEnum):
     CONFLICT = 5
 
 
+def plural(n: int, singular: str, plural_form: str | None = None) -> str:
+    return f"{n} {singular if n == 1 else (plural_form or singular + 's')}"
+
+
+def entries(n: int) -> str:
+    return plural(n, "entry", "entries")
+
+
 def exit_error(
     message: str,
     code: ExitCode = ExitCode.INVALID_ARG,
     style: str = "red",
 ) -> NoReturn:
-    """Print a styled error message and raise typer.Exit with the given code.
-
-    ``style`` is a Rich style tag (e.g. ``"red"`` or ``"yellow"``) so callers
-    can preserve informational ("not found") wording while still exiting with
-    a non-zero status.
-    """
     stderr_console.print(f"[{style}]{message}[/{style}]")
     raise typer.Exit(code=int(code))
 
 
 def confirm(prompt: str, default_no: bool = True) -> bool:
-    """Interactive yes/no prompt.
-
-    Returns False on EOF or a negative answer; raises typer.Exit when stdin
-    is not a TTY so callers can require explicit ``-f/--force``.
-    """
+    """Yes/no prompt; exits on a non-TTY so callers must offer -f/--force."""
     if not sys.stdin.isatty():
         exit_error("Not a TTY: use -f/--force to skip the prompt.")
     suffix = " [y/N]: " if default_no else " [Y/n]: "

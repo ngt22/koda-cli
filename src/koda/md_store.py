@@ -40,7 +40,7 @@ from pathlib import Path
 import yaml
 
 from .constants import TAG_SEPARATOR
-from .db import compute_uid
+from .models import compute_uid
 
 # Known frontmatter keys koda manages, mapped to internal field names. Anything
 # not in here is preserved verbatim in ``extra`` (e.g. ``type``, Obsidian props).

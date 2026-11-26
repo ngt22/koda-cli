@@ -8,62 +8,44 @@ import sys
 from dataclasses import dataclass
 
 import typer
-from rich.console import Console
 
-from ..cli_utils import ExitCode, confirm, exit_error
-from ..cmd_helpers.display import print_memo as _print_memo
+from ..cli_utils import ExitCode, confirm, exit_error, stderr_console
+from ..cmd_helpers.display import print_memo
 from ..cmd_helpers.interactive import (
-    pick_candidates,
     pick_with_fzf,
     pick_with_fzf_multi,
     resolve_pick_action,
 )
 from ..config import ConfigManager, ValidationError
-from ..main import app
+from ..main import SORT_HELP, VAR_HELP, app
 from ..models import MemoRow
 from ..runtime import (
     _apply_vars,
-    _read_stdin_refs,
     _strip_inline_comment,
     emit_raw,
     get_config,
     get_db,
     init_db,
     resolve_ref,
+    resolve_sort,
+    single_stdin_ref,
 )
-from . import memo  # bound as a module to avoid a circular import at load time
+from . import memo
 
-# A reference line in a group body: `@<ref> [args...]`. <ref> is an idx (digits)
-# or shortcut resolved via resolve_ref; the rest is shlex.split into per-child args.
+# `@<ref> [args...]` line in a group body.
 _GROUP_REF_RE = re.compile(r"^@\S+")
-# Guard against pathologically/maliciously deep nesting and indirect cycles even
-# before the uid stack catches a true loop.
 _MAX_GROUP_DEPTH = 10
 
-# Matches a shell positional-parameter reference: $1..$9, $0, $@, $*, $#, and the
-# braced forms ${1...}, ${@}, ${*}, ${#}. Deliberately does NOT match koda's own
-# ${KEY} named placeholders (a letter after the brace), so a body that only uses
-# ${KEY} still gets trailing args appended rather than swallowed.
+# $1, $@, ${1:-x} ... but not koda's own ${KEY} placeholders.
 _POSITIONAL_REF_RE = re.compile(r"\$(?:\d|[@*#]|\{\s*[\d@*#])")
 
 
 def _references_positionals(body: str) -> bool:
-    """True if the shell body already consumes positional params ($1, $@, ...).
-
-    Decides whether trailing CLI args are appended as `"$@"` (body ignores them)
-    or left for the body to pick up itself (body uses $1/$@/${1:-default}/...).
-    """
     return bool(_POSITIONAL_REF_RE.search(body))
 
 
 def _build_argv(shell: str, content: str, args: list[str]) -> list[str]:
-    """Build the `[shell, -c, content, shell, *args]` argv for one body.
-
-    Mirrors the single-entry construction: trailing args become the shell's real
-    positional params; if the body doesn't reference them, `"$@"` is appended so
-    they land at the end like extra words after an alias. With no args the tail is
-    omitted, keeping the invocation byte-for-byte identical to the no-args case.
-    """
+    """Trailing args become positional params; appended as ``"$@"`` if the body ignores them."""
     if args and not _references_positionals(content):
         content = f'{content} "$@"'
     return [shell, "-c", content, shell, *args] if args else [shell, "-c", content]
@@ -71,28 +53,16 @@ def _build_argv(shell: str, content: str, args: list[str]) -> list[str]:
 
 @dataclass(frozen=True)
 class _GroupChild:
-    """One resolved reference line in an expanded group plan."""
-
     row: MemoRow
     args: list[str]
     argv: list[str]
 
 
 def _group_ref_lines(content: str) -> list[str] | None:
-    """Classify a body after _apply_vars: list of `@`-reference lines or None.
-
-    Strips inline comments and drops blank lines first. Returns the surviving
-    reference lines if EVERY remaining line is a `@<ref>` line (a group); None if
-    none are (a normal single-entry body). A mixed body (some but not all `@`
-    lines) is an error.
-    """
-    lines = []
-    for raw in content.splitlines():
-        line = _strip_inline_comment(raw).strip()
-        if line:
-            lines.append(line)
-    if not lines:
-        return None
+    """The ``@ref`` lines if every non-blank line is one (a group), None if none are."""
+    lines = [
+        ln for ln in (_strip_inline_comment(raw).strip() for raw in content.splitlines()) if ln
+    ]
     ref_lines = [line for line in lines if _GROUP_REF_RE.match(line)]
     if not ref_lines:
         return None
@@ -104,23 +74,15 @@ def _group_ref_lines(content: str) -> list[str] | None:
 def _expand_group(
     ref_lines: list[str], shell: str, uid_stack: list[str], depth: int
 ) -> list[_GroupChild]:
-    """Resolve a group's reference lines into a flat, ordered child plan.
-
-    Resolves the FULL plan upfront so an unknown ref aborts before anything runs
-    (fail fast). Nested groups expand recursively; the uid_stack detects cycles
-    and _MAX_GROUP_DEPTH bounds runaway nesting.
-    """
+    """Flatten a group into its run plan up front, so a bad ref fails before anything runs."""
     if depth > _MAX_GROUP_DEPTH:
         exit_error(f"Group nesting too deep (max {_MAX_GROUP_DEPTH}).")
     plan: list[_GroupChild] = []
     for line in ref_lines:
-        ref = line[1:]  # drop the leading '@'
         try:
-            parts = shlex.split(ref)
+            parts = shlex.split(line[1:])
         except ValueError:
             exit_error(f"Malformed reference line: {line!r}.")
-        # shlex.split never yields an empty list here: _GROUP_REF_RE guaranteed
-        # at least one non-space char after '@'.
         child_ref, child_args = parts[0], parts[1:]
         row = resolve_ref(child_ref)
         child_content = row.content.strip() if row.content else ""
@@ -137,60 +99,55 @@ def _expand_group(
 
 
 def _first_line(content: str | None, limit: int = 60) -> str:
-    """First body line, truncated for confirmation/progress display."""
     first = (content or "").strip().splitlines()
     text = first[0] if first else ""
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
-def _confirm_remote_children(involved: list[MemoRow], force: bool) -> None:
-    """Prompt once for the source=remote entries in a group plan, or refuse.
-
-    `involved` is the deduped group+children set. Mirrors the single-entry remote
-    gate: non-TTY refuses with the `koda edit` review hint; a TTY prompts once
-    listing each remote entry (children never re-prompt individually).
-    """
-    if not get_config().exec_confirm_remote or force:
+def _confirm_remote(rows: list[MemoRow], force: bool, what: str, hint_ref: str) -> None:
+    """Gate unreviewed (source=remote) entries: refuse on a non-TTY, else prompt once."""
+    if force or not get_config().exec_confirm_remote:
         return
-    remotes = [row for row in involved if row.source == "remote"]
+    remotes = [row for row in rows if row.source == "remote"]
     if not remotes:
         return
-    listing = []
-    for row in remotes[:10]:
-        listing.append(f"[{row.idx}] {_first_line(row.content)}")
+    listing = [f"  [{row.idx}] {_first_line(row.content)}" for row in remotes[:10]]
     if len(remotes) > 10:
-        listing.append(f"... and {len(remotes) - 10} more")
-    bullet = "\n".join(f"  {item}" for item in listing)
+        listing.append(f"  ... and {len(remotes) - 10} more")
+    detail = (
+        f"{what} synced from a remote (source=remote) and not reviewed locally:\n"
+        + "\n".join(listing)
+        + f"\nReview with `koda edit {hint_ref}` to trust it (clears the flag)"
+    )
     if not sys.stdin.isatty():
-        exit_error(
-            "Refusing to exec group: it involves entries synced from a remote "
-            "(source=remote) and not reviewed locally:\n"
-            f"{bullet}\n"
-            "Review them with `koda edit <ref>` to trust them (clears the flag), "
-            "or re-run with -f to execute now.",
-            style="yellow",
-        )
-    if not confirm(
-        "This group involves entries synced from a remote and not reviewed locally:\n"
-        f"{bullet}\n"
-        "Review with `koda edit <ref>` to trust them. Execute the group now anyway?"
-    ):
+        exit_error(f"Refusing to exec: {detail}, or re-run with -f to execute now.", style="yellow")
+    if not confirm(f"{detail}. Execute now anyway?"):
         exit_error("Aborted.", code=ExitCode.CANCELLED, style="yellow")
 
 
-def _run_group(plan: list[_GroupChild], shell: str) -> None:
-    """Run each child sequentially; stop and exit on the first non-zero code.
+def _validate_shell(shell: str) -> None:
+    try:
+        ConfigManager.validate("exec.shell", shell)
+    except ValidationError:
+        exit_error(
+            f"Refusing to exec: exec.shell {shell!r} is not allowed "
+            f"({ConfigManager.error_message('exec.shell')})."
+        )
 
-    Progress goes to STDERR so stdout stays clean for the children's own output.
-    """
-    err = Console(stderr=True)
+
+def _print_argv(argv: list[str]) -> None:
+    sys.stdout.write(" ".join(shlex.quote(part) for part in argv) + "\n")
+
+
+def _run_group(plan: list[_GroupChild], shell: str) -> None:
+    """Run children in order; stop on the first non-zero exit. Progress goes to stderr."""
     total = len(plan)
     for i, child in enumerate(plan, start=1):
         label = child.row.shortcut or str(child.row.idx)
-        err.print(f"→ [{child.row.idx}] {label} ({i}/{total})", style="dim")
+        stderr_console.print(f"→ [{child.row.idx}] {label} ({i}/{total})", style="dim")
         result = subprocess.run(child.argv)
         if result.returncode != 0:
-            err.print(
+            stderr_console.print(
                 f"Group stopped: [{child.row.idx}] {label} exited {result.returncode}.",
                 style="red",
             )
@@ -202,17 +159,7 @@ def _run_pick_action(action: str, ref: str) -> None:
         emit_raw(ref)
         return
     if action == "show":
-        init_db()
-        row = resolve_ref(ref)
-        _print_memo(
-            row.uid,
-            row.idx,
-            row.shortcut,
-            row.content,
-            row.tags,
-            row.created_at,
-            title=row.title,
-        )
+        print_memo(resolve_ref(ref))
         return
     if action == "edit":
         memo.edit(ref)
@@ -244,12 +191,7 @@ def exec_memo(
         None,
         "--var",
         "-V",
-        help=(
-            "Variable substitution. Named: KEY=VALUE → replaces ${KEY}. "
-            "Positional: VALUE → replaces $1,$2,... in order. "
-            'Comma-separate multiple values; use "..." to include spaces or commas. '
-            "Examples: -V 'localhost,5432' -V 'name=prod' -V '\"hello world\",\"foo,bar\"'"
-        ),
+        help=VAR_HELP,
     ),
     force: bool = typer.Option(
         False,
@@ -288,90 +230,35 @@ def exec_memo(
     (`koda x <ref> -n > preview.txt`) rather than rendering it in the terminal.
     """
     if ref is None:
-        stdin_refs = _read_stdin_refs()
-        if len(stdin_refs) > 1:
-            exit_error("ex accepts one ref from stdin. Got multiple values.")
-        if stdin_refs:
-            ref = stdin_refs[0]
+        ref = single_stdin_ref("exec")
 
     init_db()
     row = resolve_ref(ref)
     content = _apply_vars(row.content.strip() if row.content else "", vars)
     shell = get_config().exec_shell
 
-    # Group entry: a body whose lines are all `@<ref>` references. Detected after
-    # _apply_vars so `-V` can parameterize the group body (e.g. `@${SVC}`). Only
-    # the GROUP body goes through _apply_vars; children execute verbatim, so the
-    # backslash-escaped `\$(...)` storage contract is preserved (no second pass).
+    # Only the group body gets -V substitution; children run verbatim.
     ref_lines = _group_ref_lines(content)
     if ref_lines is not None:
         if extra:
             exit_error("Group entries do not take trailing args; parameterize with -V instead.")
         plan = _expand_group(ref_lines, shell, [row.uid], depth=1)
         if dry_run:
-            # Preview only: one shlex-quoted argv line per child, in execution
-            # order. No progress lines, confirmation, or shell validation — keep
-            # it pipeable, matching the single-entry preview rendering.
             for child in plan:
-                sys.stdout.write(" ".join(shlex.quote(part) for part in child.argv) + "\n")
+                _print_argv(child.argv)
             return
-        # Dedup the group + children by id so an entry referenced twice prompts
-        # once. The group entry itself can be source=remote and must also gate.
-        involved = list({r.id: r for r in [row, *(c.row for c in plan)]}.values())
-        _confirm_remote_children(involved, force)
-        try:
-            ConfigManager.validate("exec.shell", shell)
-        except ValidationError:
-            exit_error(
-                f"Refusing to exec: exec.shell {shell!r} is not allowed "
-                f"({ConfigManager.error_message('exec.shell')})."
-            )
+        involved = list({r.uid: r for r in [row, *(c.row for c in plan)]}.values())
+        _confirm_remote(involved, force, "This group involves entries", "<ref>")
+        _validate_shell(shell)
         _run_group(plan, shell)
         return
 
-    # Trailing CLI args become the shell's real positional parameters ($1, $@,
-    # ...), so bodies can use `$1`, `"$@"`, and `${1:-default}` natively. If the
-    # body doesn't reference them, append `"$@"` so they land at the end of the
-    # command, like extra words typed after a shell alias. With no extra args the
-    # invocation is byte-for-byte what it was before (full backward compatibility).
-    positionals = list(extra or [])
-    if positionals and not _references_positionals(content):
-        content = f'{content} "$@"'
-    # argv[3] becomes $0 for the spawned shell; positionals[*] become $1, $2, ...
-    argv = [shell, "-c", content, shell, *positionals] if positionals else [shell, "-c", content]
-
+    argv = _build_argv(shell, content, list(extra or []))
     if dry_run:
-        # Preview only: skip remote confirmation and shell validation since
-        # nothing is executed. shlex.quote every part so the output is a
-        # faithful, copy-pasteable rendering of the real argv — including the
-        # `<shell> ... <args>` tail when trailing args are passed as positional
-        # parameters. The shell still does the final `$@`/`${1:-...}` expansion,
-        # so the preview shows the invocation, not the post-expansion string.
-        sys.stdout.write(" ".join(shlex.quote(part) for part in argv) + "\n")
+        _print_argv(argv)
         return
-    if row.source == "remote" and not force and get_config().exec_confirm_remote:
-        label = ref if ref is not None else f"[{row.idx}]"
-        review_hint = f"Review it with `koda edit {label}` to trust it (clears the flag)"
-        if not sys.stdin.isatty():
-            # No TTY to prompt on (cron, pipes, scripts). Steer toward review
-            # rather than habitual -f, which would defeat the safety check.
-            exit_error(
-                f"Refusing to exec {label}: synced from a remote (source=remote) and not "
-                f"reviewed locally. {review_hint}, or re-run with -f to execute now.",
-                style="yellow",
-            )
-        if not confirm(
-            f"Entry {label} was synced from a remote and not reviewed locally. "
-            f"{review_hint}. Execute now anyway?"
-        ):
-            exit_error("Aborted.", code=ExitCode.CANCELLED, style="yellow")
-    try:
-        ConfigManager.validate("exec.shell", shell)
-    except ValidationError:
-        exit_error(
-            f"Refusing to exec: exec.shell {shell!r} is not allowed "
-            f"({ConfigManager.error_message('exec.shell')})."
-        )
+    _confirm_remote([row], force, "This entry was", ref if ref is not None else str(row.idx))
+    _validate_shell(shell)
     os.execvp(shell, argv)
 
 
@@ -391,10 +278,7 @@ def pick(
         None,
         "--sort-by",
         case_sensitive=False,
-        help=(
-            "Sort column: id, idx, uid, tags, content, created_at, modified_at, shortcut. "
-            "[config: list.sort_by]"
-        ),
+        help=SORT_HELP,
     ),
     desc: bool | None = typer.Option(
         None,
@@ -428,8 +312,14 @@ def pick(
         exit_error("--print-id/-p cannot be combined with action flags.")
 
     init_db()
-    candidates = pick_candidates(
-        get_db(), get_config(), query, tag, exclude_tag, shortcuts_only, sort_by, desc
+    sort_col, desc = resolve_sort(sort_by, desc)
+    candidates = get_db().get_memos(
+        query=query,
+        tag=tag,
+        exclude_tag=exclude_tag,
+        shortcuts_only=shortcuts_only,
+        sort_by=sort_col,
+        desc=desc,
     )
     if not candidates:
         exit_error("No entries found.", style="yellow")

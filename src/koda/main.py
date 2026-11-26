@@ -1,15 +1,11 @@
-"""Koda CLI entry point: alias resolution, the Typer ``app``, and command wiring.
-
-The actual subcommands live in ``koda.commands`` and shared runtime helpers in
-``koda.runtime``. This module only owns the alias map, the ``KodaGroup`` resolver,
-the root ``app`` / callback, and the imports that register every command.
-"""
+"""CLI entry point: aliases, the root ``app``, and command registration."""
 
 import typer
 from typer.core import TyperGroup
 
-from .cmd_helpers.display import print_memo as _print_memo
+from .cmd_helpers.display import print_memo
 from .commands.config import config_app
+from .models import VALID_SORT_COLUMNS
 from .runtime import (
     emit_raw,
     get_config,
@@ -38,6 +34,14 @@ ALIASES = {
 }
 RESERVED_SHORTCUTS = set(ALIASES.keys())
 
+SORT_HELP = f"Sort column: {', '.join(sorted(VALID_SORT_COLUMNS))}. [config: list.sort_by]"
+VAR_HELP = (
+    "Variable substitution. Named: KEY=VALUE → replaces ${KEY}. "
+    "Positional: VALUE → replaces $1,$2,... in order. "
+    'Comma-separate multiple values; use "..." to include spaces or commas. '
+    "Examples: -V 'localhost,5432' -V 'name=prod' -V '\"hello world\",\"foo,bar\"'"
+)
+
 
 class KodaGroup(TyperGroup):
     """Resolve bare refs (numeric idx or shortcut string) to the default command."""
@@ -61,9 +65,7 @@ app = typer.Typer(
         "Koda — memos and terminal snippets stored as plain Markdown files "
         "(Obsidian / editor / AI friendly). "
         "Run with no subcommand to print the latest entry body (same as `koda raw`).\n\n"
-        "One-letter aliases:\n"
-        "a=add c=copy d=remove e=edit g=config h=shift k=compact\n"
-        "l=list m=move p=pick r=raw s=show t=tag w=swap x=exec"
+        "One-letter aliases:\n" + " ".join(f"{k}={v}" for k, v in ALIASES.items())
     ),
     context_settings={"help_option_names": ["-h", "--help"]},
     cls=KodaGroup,
@@ -93,23 +95,22 @@ def main(
     ),
 ):
     """Default: run the default command (see `koda config get defaults.cmd`)."""
-    if ctx.invoked_subcommand is None:
-        cmd = get_config().defaults_cmd
-        if cmd == "list":
-            memo._list_memos_impl()
-        elif cmd == "show":
-            init_db()
-            row = resolve_ref(None)
-            _print_memo(row.uid, row.idx, row.shortcut, row.content, row.tags, row.created_at)
-        elif cmd == "add":
-            memo._add_impl()
+    if ctx.invoked_subcommand is not None:
+        return
+    cmd = get_config().defaults_cmd
+    if cmd == "list":
+        memo._list_memos_impl()
+    elif cmd == "add":
+        memo._add_impl()
+    else:
+        init_db()
+        if cmd == "show":
+            print_memo(resolve_ref(None))
         else:
             emit_raw(None)
 
 
-# Importing the command modules runs their @app.command decorators, registering
-# every subcommand on ``app``. These imports must follow ``app`` (and ALIASES /
-# RESERVED_SHORTCUTS, which the command modules import from here).
+# Command modules register themselves on ``app`` at import, so they must follow it.
 from .commands import exec as _exec  # noqa: E402,F401
 from .commands import git, index, manage, memo, resolve  # noqa: E402,F401
 from .commands import update as _update  # noqa: E402,F401
